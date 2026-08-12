@@ -1,0 +1,27 @@
+[package]
+name = "execution"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rust_decimal = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+parking_lot = { workspace = true }
+chrono = { workspace = true }
+futures = { workspace = true }
+uuid = { workspace = true }
+arc-swap = "1.6"
+
+# Internal
+exchange-adapter-lbank = { path = "../exchange-adapter-lbank" }
+config = { path = "../config" }
+risk-gate = { path = "../risk-gate" }
+signal-engine = { path = "../signal-engine" }
+
+[dev-dependencies]
+tokio = { workspace = true }

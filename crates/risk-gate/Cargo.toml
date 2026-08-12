@@ -1,0 +1,22 @@
+[package]
+name = "risk-gate"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rust_decimal = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+parking_lot = { workspace = true }
+chrono = { workspace = true }
+arc-swap = "1.6"
+
+# Internal
+config = { path = "../config" }
+
+[dev-dependencies]
+tokio = { workspace = true }

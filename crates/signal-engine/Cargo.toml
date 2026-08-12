@@ -1,0 +1,23 @@
+[package]
+name = "signal-engine"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rust_decimal = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+parking_lot = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+
+# Internal
+orderbook = { path = "../orderbook" }
+config = { path = "../config" }
+
+[dev-dependencies]
+tokio = { workspace = true }

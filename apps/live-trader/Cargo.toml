@@ -1,0 +1,32 @@
+[package]
+name = "live-trader"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "live-trader"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+rust_decimal = { workspace = true }
+clap = { version = "4.5", features = ["derive"] }
+toml = { workspace = true }
+
+# Internal crates
+config = { path = "../../crates/config" }
+exchange-adapter-lbank = { path = "../../crates/exchange-adapter-lbank" }
+md-gateway = { path = "../../crates/md-gateway" }
+clock-sync = { path = "../../crates/clock-sync" }
+orderbook = { path = "../../crates/orderbook" }
+signal-engine = { path = "../../crates/signal-engine" }
+risk-gate = { path = "../../crates/risk-gate" }
+execution = { path = "../../crates/execution" }
+fee-pnl = { path = "../../crates/fee-pnl" }
+persistence = { path = "../../crates/persistence" }
+metrics = { path = "../../crates/metrics" }

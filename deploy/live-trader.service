@@ -1,0 +1,41 @@
+[Unit]
+Description=Lead-Lag Arbitrage Trader
+Documentation=https://github.com/YOUR_USERNAME/lead-lag-arb
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/lead-lag-arb
+
+# Environment
+Environment=RUST_LOG=info
+Environment=RUST_BACKTRACE=1
+
+# Executable - modify symbol as needed
+ExecStart=/opt/lead-lag-arb/target/release/live-trader --symbol BTCUSDT
+
+# Restart policy
+Restart=always
+RestartSec=10
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=live-trader
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/opt/lead-lag-arb/logs
+PrivateTmp=true
+
+# Resource limits
+LimitNOFILE=65536
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target

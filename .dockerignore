@@ -1,0 +1,26 @@
+# Dependencies
+target/
+Cargo.lock
+
+# Git
+.git/
+.github/
+
+# IDE
+.idea/
+.vscode/
+
+# Environment
+.env
+.env.*
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+.docker/
