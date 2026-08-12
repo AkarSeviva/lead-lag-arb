@@ -647,10 +647,19 @@ Phase 5: 端到端
 | | 签名验证 | 确保 HMAC-SHA256 签名正确 |
 | | 代理设置 | 某些地区需要代理 |
 
-### 测试网络/账户
-- 使用各交易所提供的 **测试网**
-- 创建专用测试账户，与生产环境隔离
-- 准备足够的测试资金
+### 测试环境
+
+> ⚠️ **重要**: Lbank 没有测试环境，所有测试使用真实账户！
+
+| 交易所 | 环境 | 说明 |
+|--------|------|------|
+| Binance | Testnet | WebSocket 可用测试网 |
+| Lbank | **生产环境** | 无测试网，使用真实资金 |
+
+**测试建议**:
+- 先在 Binance Testnet 验证 WebSocket 连接
+- 用小资金在 Lbank 真实环境测试
+- 从极小仓位开始，逐步增加
 
 ---
 
@@ -697,20 +706,23 @@ mod integration_tests {
 
 ### exchange-adapter-lbank 集成测试
 
+> ⚠️ Lbank 无测试环境，以下测试直接使用真实 API
+
 ```rust
 #[cfg(test)]
 mod integration_tests {
     /// 测试 Lbank REST API 签名
     #[tokio::test]
     async fn test_lbank_signature() {
-        // 使用测试密钥验证签名算法
+        // 使用真实密钥验证签名算法
+        // ⚠️ 注意: 会产生真实请求
     }
 
     /// 测试 WebSocket 连接和数据流
     #[tokio::test]
     async fn test_lbank_websocket() {
-        // 连接测试网 WebSocket
-        // 验证订单簿数据结构
+        // 连接真实 WebSocket
+        // ⚠️ 会产生真实网络流量
     }
 
     /// 测试代理连接
@@ -842,8 +854,14 @@ let ws_url = env::get("LBANK_WS_URL", "wss://www.lbank.com/ws");
 
 ### 环境变量参考
 
+> ⚠️ **重要**: Lbank 没有测试环境，所有配置使用真实账户
+
 ```bash
-# 必需
+# Binance (可选 Testnet)
+BINANCE_API_KEY=your_binance_key_here
+BINANCE_SECRET_KEY=your_binance_secret_here
+
+# Lbank (真实环境 - 无测试网)
 LBANK_API_KEY=your_key
 LBANK_SECRET_KEY=your_secret
 
@@ -851,9 +869,9 @@ LBANK_SECRET_KEY=your_secret
 LBANK_WS_URL=wss://www.lbank.com/ws
 BINANCE_WS_URL=wss://stream.binance.com:9443/ws
 
-# 代理 (如需要)
-HTTP_PROXY=http://127.0.0.1:7890
-HTTPS_PROXY=http://127.0.0.1:7890
+# 代理 (可选，不使用则留空)
+# HTTP_PROXY=http://127.0.0.1:7890
+# HTTPS_PROXY=http://127.0.0.1:7890
 ```
 
 

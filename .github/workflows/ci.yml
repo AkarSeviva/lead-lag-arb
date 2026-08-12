@@ -74,14 +74,6 @@ jobs:
   integration-test:
     name: Integration Tests
     runs-on: ubuntu-latest
-    # 仅在 PR 时运行，需要 API 密钥
-    if: github.event_name == 'pull_request'
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Run integration tests
-        env:
-          BINANCE_API_KEY: ${{ secrets.BINANCE_TESTNET_KEY }}
-          LBANK_API_KEY: ${{ secrets.LBANK_TEST_KEY }}
-          LBANK_SECRET_KEY: ${{ secrets.LBANK_TEST_SECRET }}
-        run: cargo test --workspace --test integration -- --ignored
+    if: false  # 禁用集成测试 (Lbank 无测试环境，直接使用真实账户测试)
+    # 如需手动测试，在本地运行:
+    # cargo test --workspace --test integration

@@ -97,7 +97,8 @@ pub struct NetworkConfig {
     /// Enable HTTP proxy
     pub proxy_enabled: bool,
 
-    /// Proxy server address (e.g., "127.0.0.1:7890")
+    /// Proxy server address (e.g., "http://127.0.0.1:7890")
+    /// Empty string means no proxy
     pub proxy_addr: String,
 
     /// Connection timeout in seconds
@@ -114,7 +115,7 @@ impl Default for NetworkConfig {
     fn default() -> Self {
         Self {
             proxy_enabled: false,
-            proxy_addr: "127.0.0.1:7890".to_string(),
+            proxy_addr: String::new(),
             connect_timeout_secs: 10,
             request_timeout_secs: 30,
             keep_alive: true,

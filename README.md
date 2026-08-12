@@ -249,7 +249,7 @@ circuit_breaker_losses = 5
 # Network
 [network]
 proxy_enabled = false
-proxy_url = "http://127.0.0.1:7890"
+proxy_url = ""
 ```
 
 ## Development

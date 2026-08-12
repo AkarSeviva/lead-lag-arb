@@ -11,7 +11,7 @@ pub fn init() {
 
 /// Get required environment variable, panics if not found
 pub fn require(key: &str) -> String {
-    env::var(key).expect(&format!("Environment variable '{}' not set", key))
+    env::var(key).unwrap_or_else(|_| panic!("Environment variable '{}' not set", key))
 }
 
 /// Get optional environment variable

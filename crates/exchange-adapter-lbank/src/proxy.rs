@@ -11,7 +11,8 @@ use tracing::info;
 pub struct ProxyConfig {
     /// Enable proxy
     pub enabled: bool,
-    /// Proxy server address (e.g., "127.0.0.1:7890")
+    /// Proxy server address (e.g., "http://127.0.0.1:7890")
+    /// Empty string means no proxy
     pub proxy_addr: String,
     /// Connection timeout in seconds
     pub connect_timeout_secs: u64,
@@ -21,7 +22,7 @@ impl Default for ProxyConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            proxy_addr: "127.0.0.1:7890".to_string(),
+            proxy_addr: String::new(),
             connect_timeout_secs: 10,
         }
     }
@@ -111,18 +112,18 @@ mod tests {
     fn test_proxy_config_default() {
         let config = ProxyConfig::default();
         assert!(!config.enabled);
-        assert_eq!(config.proxy_addr, "127.0.0.1:7890");
+        assert!(config.proxy_addr.is_empty());
     }
 
     #[test]
     fn test_proxy_enabled() {
         let config = ProxyConfig {
             enabled: true,
-            proxy_addr: "127.0.0.1:7890".to_string(),
+            proxy_addr: "http://127.0.0.1:7890".to_string(),
             connect_timeout_secs: 10,
         };
         let client = ProxyClient::new(config);
         assert!(client.is_enabled());
-        assert_eq!(client.proxy_addr(), "127.0.0.1:7890");
+        assert_eq!(client.proxy_addr(), "http://127.0.0.1:7890");
     }
 }
