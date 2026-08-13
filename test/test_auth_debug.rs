@@ -1,7 +1,9 @@
-//! 认证调试测试 - 使用正确的 body 参数
+//! 认证调试测试 - 保存结果到文件
 
 use exchange_adapter_lbank::{auth::LbankSigner, client::LbankClient, proxy::ProxyConfig};
 use serde::Serialize;
+use std::fs::File;
+use std::io::Write;
 use std::sync::Arc;
 use tracing::{error, info};
 use tracing_subscriber::util::SubscriberInitExt;
@@ -17,8 +19,7 @@ struct MarketOrderRequest<'a> {
     depth: i32,
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     // 初始化日志
     tracing_subscriber::FmtSubscriber::builder()
         .with_max_level(tracing::Level::DEBUG)
@@ -26,9 +27,10 @@ async fn main() -> anyhow::Result<()> {
         .finish()
         .init();
 
-    info!("===========================================");
-    info!("认证调试测试 - 使用正确参数");
-    info!("===========================================");
+    let mut output = String::new();
+    output.push_str("===========================================\n");
+    output.push_str("认证调试测试 - 使用正确参数\n");
+    output.push_str("===========================================\n\n");
 
     // 创建签名器
     let signer = LbankSigner::new(
@@ -42,15 +44,16 @@ async fn main() -> anyhow::Result<()> {
     let path = "/cfd/market/v1.0/SendQryMarketOrder";
     let headers = signer.get_headers("POST", path);
 
-    info!("生成的签名信息:");
-    info!("  Method: POST");
-    info!("  Path: {}", path);
-    info!("  Timestamp: {}", headers.timestamp);
-    info!("  UID: {}", headers.uid);
-    info!("  Token: {}", headers.token);
-    info!("  Device ID: {}", headers.device_id);
-    info!("  Signature: {}", headers.signature);
-    info!("  Version: {}", headers.version_code);
+    output.push_str(&format!("生成的签名信息:\n"));
+    output.push_str(&format!("  Method: POST\n"));
+    output.push_str(&format!("  Path: {}\n", path));
+    output.push_str(&format!("  Timestamp: {}\n", headers.timestamp));
+    output.push_str(&format!("  UID: {}\n", headers.uid));
+    output.push_str(&format!("  Token: {}\n", headers.token));
+    output.push_str(&format!("  Device ID: {}\n", headers.device_id));
+    output.push_str(&format!("  Signature: {}\n", headers.signature));
+    output.push_str(&format!("  Version: {}\n", headers.version_code));
+    output.push_str("\n");
 
     // 创建客户端
     let proxy_config = ProxyConfig::default();
@@ -60,7 +63,7 @@ async fn main() -> anyhow::Result<()> {
         proxy_config,
     )?);
 
-    info!("\n发送请求...");
+    output.push_str("发送请求...\n\n");
 
     // 使用正确的参数格式
     let request = MarketOrderRequest {
@@ -72,18 +75,28 @@ async fn main() -> anyhow::Result<()> {
     
     // 打印请求体
     let body_json = serde_json::to_string(&request).unwrap();
-    info!("  Request Body: {}", body_json);
+    output.push_str(&format!("  Request Body: {}\n\n", body_json));
 
-    // 发送请求
-    match client.post::<_, serde_json::Value>(path, &request).await {
+    // 发送请求 - 使用 serde_json::Value 接收原始 JSON
+    let rt = tokio::runtime::Runtime::new()?;
+    match rt.block_on(client.post::<_, serde_json::Value>(path, &request)) {
         Ok(resp) => {
-            info!("✅ 请求成功!");
-            info!("  Response: {}", serde_json::to_string_pretty(&resp).unwrap_or_default());
+            output.push_str("✅ 请求成功!\n\n");
+            output.push_str("Response:\n");
+            output.push_str(&serde_json::to_string_pretty(&resp).unwrap_or_default());
+            output.push_str("\n");
         }
         Err(e) => {
-            error!("❌ 请求失败: {}", e);
+            output.push_str(&format!("❌ 请求失败: {}\n", e));
         }
     }
+
+    // 写入文件
+    let filename = "test_auth_debug_result.json";
+    let mut file = File::create(filename)?;
+    file.write_all(output.as_bytes())?;
+    
+    println!("结果已保存到: {}", filename);
 
     Ok(())
 }
