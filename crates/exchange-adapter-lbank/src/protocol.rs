@@ -345,18 +345,107 @@ impl CloseOrderInsertRequest {
 
 /// Order Insert Response
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct OrderInsertResponse {
+    #[serde(rename = "offsetFlag")]
     pub offset_flag: String,
+    #[serde(rename = "orderType")]
     pub order_type: String,
+    pub reserve_mode: String,
     pub fee: String,
+    #[serde(rename = "frozenFee")]
     pub frozen_fee: String,
+    #[serde(rename = "userID")]
     pub user_id: String,
+    #[serde(rename = "masterAccountID")]
+    pub master_account_id: String,
+    #[serde(rename = "exchangeID")]
     pub exchange_id: String,
+    #[serde(rename = "accountID")]
     pub account_id: String,
+    #[serde(rename = "orderSysID")]
     pub order_sys_id: String,
+    #[serde(rename = "volumeRemain")]
     pub volume_remain: String,
     pub price: String,
+    #[serde(rename = "businessValue")]
+    pub business_value: String,
+    #[serde(rename = "frozenMargin")]
+    pub frozen_margin: String,
+    #[serde(rename = "instrumentID")]
+    pub instrument_id: String,
+    #[serde(rename = "posiDirection")]
+    pub posi_direction: String,
+    #[serde(rename = "volumeMode")]
+    pub volume_mode: String,
+    pub volume: String,
+    #[serde(rename = "insertTime")]
+    pub insert_time: String,
+    #[serde(rename = "copyMemberID")]
+    pub copy_member_id: String,
+    pub position: String,
+    #[serde(rename = "tradePrice")]
+    pub trade_price: String,
+    pub leverage: String,
+    #[serde(rename = "businessResult")]
+    pub business_result: String,
+    #[serde(rename = "originalTips")]
+    pub original_tips: String,
+    #[serde(rename = "availableUse")]
+    pub available_use: String,
+    #[serde(rename = "orderStatus")]
+    pub order_status: String,
+    #[serde(rename = "openPrice")]
+    pub open_price: String,
+    #[serde(rename = "frozenMoney")]
+    pub frozen_money: String,
+    pub remark: String,
+    #[serde(rename = "reserveUse")]
+    pub reserve_use: String,
+    #[serde(rename = "sessionNo")]
+    pub session_no: String,
+    #[serde(rename = "isCrossMargin")]
+    pub is_cross_margin: String,
+    #[serde(rename = "closeProfit")]
+    pub close_profit: String,
+    #[serde(rename = "businessNo")]
+    pub business_no: String,
+    #[serde(rename = "relatedOrderSysID")]
+    pub related_order_sys_id: String,
+    #[serde(rename = "positionID")]
+    pub position_id: String,
+    pub mock_resp: bool,
+    #[serde(rename = "deriveSource")]
+    pub derive_source: String,
+    #[serde(rename = "copyOrderID")]
+    pub copy_order_id: String,
+    pub currency: String,
+    pub turnover: String,
+    #[serde(rename = "frontNo")]
+    pub front_no: String,
+    pub direction: String,
+    #[serde(rename = "orderPriceType")]
+    pub order_price_type: String,
+    #[serde(rename = "volumeCancled")]
+    pub volume_cancled: String,
+    #[serde(rename = "updateTime")]
+    pub update_time: String,
+    #[serde(rename = "localID")]
+    pub local_id: String,
+    #[serde(rename = "volumeTraded")]
+    pub volume_traded: String,
+    #[serde(rename = "minVolume")]
+    pub min_volume: String,
+    pub appid: String,
+    #[serde(rename = "tradeUnitID")]
+    pub trade_unit_id: String,
+    #[serde(rename = "businessType")]
+    pub business_type: String,
+    #[serde(rename = "memberID")]
+    pub member_id: String,
+    #[serde(rename = "timeCondition")]
+    pub time_condition: String,
+    #[serde(rename = "copyProfit")]
+    pub copy_profit: String,
 }
 
 /// Position Query Request
