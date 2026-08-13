@@ -535,44 +535,65 @@ pub struct SetLeverageRequest {
 /// Aggregate Info (完整版) - 文档3.2
 #[derive(Debug, Deserialize)]
 pub struct AggregateInfoResponse {
-    #[serde(rename = "assetBalance")]
+    #[serde(rename = "assetBalance", default)]
     pub asset_balance: Option<AssetBalance>,
-    #[serde(rename = "markedPrice")]
+    #[serde(rename = "markedPrice", default)]
     pub marked_price: String,
-    #[serde(rename = "longLeverage")]
+    #[serde(rename = "longLeverage", default)]
     pub long_leverage: Option<i32>,
-    #[serde(rename = "shortLeverage")]
+    #[serde(rename = "shortLeverage", default)]
     pub short_leverage: Option<i32>,
-    #[serde(rename = "longMaxLeverage")]
+    #[serde(rename = "longMaxLeverage", default)]
     pub long_max_leverage: Option<i32>,
-    #[serde(rename = "shortMaxLeverage")]
+    #[serde(rename = "shortMaxLeverage", default)]
     pub short_max_leverage: Option<i32>,
-    #[serde(rename = "fundingRate")]
+    #[serde(rename = "fundingRate", default)]
     pub funding_rate: Option<String>,
-    #[serde(rename = "isMarketAcount")]
+    #[serde(rename = "isMarketAcount", default)]
     pub is_market_account: Option<i32>,
-    #[serde(rename = "isOnlyClose")]
+    #[serde(rename = "isOnlyClose", default)]
     pub is_only_close: Option<i32>,
+    #[serde(default)]
     pub state: Option<i32>,
+    #[serde(rename = "isCrossMargin", default)]
+    pub is_cross_margin: Option<i32>,
+    #[serde(rename = "lastPrice", default)]
+    pub last_price: Option<String>,
+    #[serde(rename = "wsToken", default)]
+    pub ws_token: Option<String>,
+    #[serde(rename = "pairType", default)]
+    pub pair_type: Option<i32>,
 }
 
 /// Asset Balance - 文档3.2
 #[derive(Debug, Deserialize)]
 pub struct AssetBalance {
-    #[serde(rename = "assets")]
+    #[serde(default)]
     pub assets: String,
     pub available: String,
     pub balance: String,
-    #[serde(rename = "realAvailable")]
+    #[serde(rename = "realAvailable", default)]
     pub real_available: String,
-    #[serde(rename = "frozenMargin")]
+    #[serde(rename = "frozenMargin", default)]
     pub frozen_margin: String,
-    #[serde(rename = "totalCloseProfit")]
+    #[serde(rename = "totalCloseProfit", default)]
     pub total_close_profit: String,
-    #[serde(rename = "crossMargin")]
+    #[serde(rename = "crossMargin", default)]
     pub cross_margin: Option<String>,
-    #[serde(rename = "marginAble")]
+    #[serde(rename = "marginAble", default)]
     pub margin_able: Option<String>,
+    #[serde(rename = "frozenFee", default)]
+    pub frozen_fee: Option<String>,
+    #[serde(rename = "reserveAvailable", default)]
+    pub reserve_available: Option<String>,
+    #[serde(rename = "reserveMode", default)]
+    pub reserve_mode: Option<String>,
+    #[serde(rename = "reserveBusiness", default)]
+    pub reserve_business: Option<String>,
+    #[serde(rename = "reserveRatio", default)]
+    pub reserve_ratio: Option<String>,
+    #[serde(rename = "reserve", default)]
+    pub reserve: Option<String>,
 }
 
 /// Account Info Response - 文档3.2
