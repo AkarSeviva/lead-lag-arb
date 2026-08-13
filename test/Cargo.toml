@@ -8,6 +8,10 @@ authors.workspace = true
 name = "test_phase1"
 path = "test_phase1.rs"
 
+[[bin]]
+name = "test_auth_debug"
+path = "test_auth_debug.rs"
+
 [dependencies]
 exchange-adapter-lbank = { path = "../crates/exchange-adapter-lbank" }
 tokio.workspace = true

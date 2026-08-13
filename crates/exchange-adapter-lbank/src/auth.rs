@@ -58,8 +58,8 @@ impl LbankSigner {
         (signature, timestamp)
     }
 
-    /// Build the signature string
-    fn build_sign_string(&self, method: &str, path: &str, timestamp: i64) -> String {
+    /// Build the signature string (public for testing)
+    pub fn build_sign_string(&self, method: &str, path: &str, timestamp: i64) -> String {
         // Format: [METHOD][PATH][TIMESTAMP][USER_AGENT][VERSION_CODE][CHANNEL][CLIENT_TYPE][DEVICE_ID]
         format!(
             "{}{}{}{}{}{}{}{}",
