@@ -8,17 +8,6 @@ use std::sync::Arc;
 use tracing::{error, info};
 use tracing_subscriber::util::SubscriberInitExt;
 
-#[derive(Serialize)]
-struct MarketOrderRequest<'a> {
-    #[serde(rename = "ProductGroup")]
-    product_group: &'a str,
-    #[serde(rename = "ExchangeID")]
-    exchange_id: &'a str,
-    #[serde(rename = "InstrumentID")]
-    instrument_id: &'a str,
-    depth: i32,
-}
-
 fn main() -> anyhow::Result<()> {
     // 初始化日志
     tracing_subscriber::FmtSubscriber::builder()
@@ -29,7 +18,7 @@ fn main() -> anyhow::Result<()> {
 
     let mut output = String::new();
     output.push_str("===========================================\n");
-    output.push_str("认证调试测试 - 使用正确参数\n");
+    output.push_str("Lbank API 测试\n");
     output.push_str("===========================================\n\n");
 
     // 创建签名器
@@ -40,21 +29,6 @@ fn main() -> anyhow::Result<()> {
         Some("hZlegXdOAxOsNqUVl7oL8p8lwE3dIeqQ".to_string()),
     );
 
-    // 使用正确的路径
-    let path = "/cfd/market/v1.0/SendQryMarketOrder";
-    let headers = signer.get_headers("POST", path);
-
-    output.push_str(&format!("生成的签名信息:\n"));
-    output.push_str(&format!("  Method: POST\n"));
-    output.push_str(&format!("  Path: {}\n", path));
-    output.push_str(&format!("  Timestamp: {}\n", headers.timestamp));
-    output.push_str(&format!("  UID: {}\n", headers.uid));
-    output.push_str(&format!("  Token: {}\n", headers.token));
-    output.push_str(&format!("  Device ID: {}\n", headers.device_id));
-    output.push_str(&format!("  Signature: {}\n", headers.signature));
-    output.push_str(&format!("  Version: {}\n", headers.version_code));
-    output.push_str("\n");
-
     // 创建客户端
     let proxy_config = ProxyConfig::default();
     let client = Arc::new(LbankClient::with_base_url_and_proxy(
@@ -63,31 +37,43 @@ fn main() -> anyhow::Result<()> {
         proxy_config,
     )?);
 
-    output.push_str("发送请求...\n\n");
-
-    // 使用正确的参数格式
-    let request = MarketOrderRequest {
-        product_group: "SwapU",
-        exchange_id: "Exchange",
-        instrument_id: "BTCUSDT",
-        depth: 25,
-    };
-    
-    // 打印请求体
-    let body_json = serde_json::to_string(&request).unwrap();
-    output.push_str(&format!("  Request Body: {}\n\n", body_json));
-
-    // 发送请求 - 使用 serde_json::Value 接收原始 JSON
     let rt = tokio::runtime::Runtime::new()?;
-    match rt.block_on(client.post::<_, serde_json::Value>(path, &request)) {
-        Ok(resp) => {
-            output.push_str("✅ 请求成功!\n\n");
-            output.push_str("Response:\n");
-            output.push_str(&serde_json::to_string_pretty(&resp).unwrap_or_default());
-            output.push_str("\n");
+
+    // 测试 1: 市场订单簿
+    output.push_str("【测试 1】市场订单簿 (get_order_book)\n");
+    output.push_str("----------------------------------------\n");
+    match rt.block_on(client.get_order_book("BTCUSDT", 25)) {
+        Ok(items) => {
+            output.push_str(&format!("✅ 成功! 获取到 {} 条订单\n\n", items.len()));
+            output.push_str("前10条:\n");
+            for (i, item) in items.iter().take(10).enumerate() {
+                output.push_str(&format!(
+                    "  {}. 价格={}, 数量={}, 方向={}\n",
+                    i + 1, item.price, item.volume, item.direction
+                ));
+            }
         }
         Err(e) => {
-            output.push_str(&format!("❌ 请求失败: {}\n", e));
+            output.push_str(&format!("❌ 失败: {}\n", e));
+        }
+    }
+    output.push_str("\n");
+
+    // 测试 2: 账户余额
+    output.push_str("【测试 2】账户余额 (sendQryAll)\n");
+    output.push_str("----------------------------------------\n");
+    match rt.block_on(client.get_aggregate_info("BTCUSDT")) {
+        Ok(info) => {
+            output.push_str("✅ 成功!\n\n");
+            if let Some(balance) = &info.asset_balance {
+                output.push_str(&format!("  资产余额: {}\n", balance.balance));
+                output.push_str(&format!("  可用余额: {}\n", balance.available));
+                output.push_str(&format!("  冻结保证金: {}\n", balance.frozen_margin));
+            }
+            output.push_str(&format!("  标记价格: {}\n", info.marked_price));
+        }
+        Err(e) => {
+            output.push_str(&format!("❌ 失败: {}\n", e));
         }
     }
 

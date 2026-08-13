@@ -193,20 +193,21 @@ impl LbankClient {
             depth: usize,
         }
 
+        // API 返回扁平数组: [{"table":"MarketOrder","data":{...}}, ...]
         #[derive(Deserialize)]
-        struct Response {
-            table: String,
-            data: Vec<MarketOrderItem>,
+        struct MarketOrderResponse {
+            #[serde(rename = "data")]
+            data: MarketOrderItem,
         }
 
-        let resp: Response = self.post("/cfd/market/v1.0/SendQryMarketOrder", &Request {
+        let resp: Vec<MarketOrderResponse> = self.post("/cfd/market/v1.0/SendQryMarketOrder", &Request {
             product_group: "SwapU",
             exchange_id: "Exchange",
             instrument_id: symbol,
             depth,
         }).await?;
 
-        Ok(resp.data)
+        Ok(resp.into_iter().map(|r| r.data).collect())
     }
 
     /// Get instrument info
