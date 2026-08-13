@@ -13,14 +13,16 @@
 //! 10. 限价平空仓
 
 use exchange_adapter_lbank::{auth::LbankSigner, client::LbankClient, protocol::TradeDirection, proxy::ProxyConfig};
+use rust_decimal::Decimal;
+use std::str::FromStr;
 use std::fs::File;
 use std::io::Write;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{error, info};
+use tracing_subscriber::util::SubscriberInitExt;
 
 const SYMBOL: &str = "BTCUSDT";
-const VOLUME: &str = "0.0001";
+const VOLUME_STR: &str = "0.0001";
 
 fn main() -> anyhow::Result<()> {
     // 初始化日志
@@ -28,14 +30,14 @@ fn main() -> anyhow::Result<()> {
         .with_max_level(tracing::Level::DEBUG)
         .with_target(true)
         .finish()
-        .init();
+        .try_init()?;
 
     let mut output = String::new();
     output.push_str("===========================================\n");
     output.push_str("Lbank 订单操作测试\n");
     output.push_str("===========================================\n\n");
     output.push_str(&format!("交易对: {}\n", SYMBOL));
-    output.push_str(&format!("数量: {} BTC\n\n", VOLUME));
+    output.push_str(&format!("数量: {} BTC\n\n", VOLUME_STR));
 
     // 创建签名器
     let signer = LbankSigner::new(
@@ -54,7 +56,7 @@ fn main() -> anyhow::Result<()> {
     )?);
 
     let rt = tokio::runtime::Runtime::new()?;
-    let volume = VOLUME.parse().unwrap();
+    let volume = Decimal::from_str(VOLUME_STR).unwrap();
 
     // =========================================================================
     // Step 1: 查询当前持仓
@@ -65,8 +67,8 @@ fn main() -> anyhow::Result<()> {
         Ok(positions) => {
             output.push_str(&format!("✅ 查询成功! 当前持仓数: {}\n", positions.len()));
             for pos in &positions {
-                output.push_str(&format!("  - {} {}: {}\n", 
-                    pos.instrument_id, pos.direction, pos.volume));
+                output.push_str(&format!("  - {} 方向:{} 数量:{}\n", 
+                    pos.instrument_id, pos.posi_direction, pos.position));
             }
         }
         Err(e) => {
@@ -82,12 +84,10 @@ fn main() -> anyhow::Result<()> {
     output.push_str("----------------------------------------\n");
     match rt.block_on(client.market_open(SYMBOL, TradeDirection::Long, volume)) {
         Ok(resp) => {
-            output.push_str(&format!("✅ 开多仓成功!\n"));
-            output.push_str(&format!("  OrderID: {}\n", resp.order_id));
-            output.push_str(&format!("  订单状态: {}\n", resp.status));
-            if let Some(msg) = resp.error_msg {
-                output.push_str(&format!("  错误信息: {}\n", msg));
-            }
+            output.push_str(&format!("✅ 开多仓请求已发送!\n"));
+            output.push_str(&format!("  OrderSysID: {}\n", resp.order_sys_id));
+            output.push_str(&format!("  剩余数量: {}\n", resp.volume_remain));
+            output.push_str(&format!("  手续费: {}\n", resp.fee));
         }
         Err(e) => {
             output.push_str(&format!("❌ 失败: {}\n", e));
@@ -108,8 +108,8 @@ fn main() -> anyhow::Result<()> {
         Ok(positions) => {
             output.push_str(&format!("✅ 查询成功! 当前持仓数: {}\n", positions.len()));
             for pos in &positions {
-                output.push_str(&format!("  - {} 方向:{} 数量:{}\n", 
-                    pos.instrument_id, pos.posi_direction, pos.position));
+                output.push_str(&format!("  - {} 方向:{} 数量:{} 开仓价:{}\n", 
+                    pos.instrument_id, pos.posi_direction, pos.position, pos.open_price));
                 if pos.posi_direction == "0" {
                     output.push_str(&format!("    TradeUnitID: {}\n", pos.trade_unit_id));
                 }
@@ -142,9 +142,9 @@ fn main() -> anyhow::Result<()> {
             output.push_str(&format!("  TradeUnitID: {}\n", tid));
             match rt.block_on(client.market_close(SYMBOL, TradeDirection::Long, volume, &tid)) {
                 Ok(resp) => {
-                    output.push_str(&format!("✅ 平多仓成功!\n"));
-                    output.push_str(&format!("  OrderID: {}\n", resp.order_id));
-                    output.push_str(&format!("  订单状态: {}\n", resp.status));
+                    output.push_str(&format!("✅ 平多仓请求已发送!\n"));
+                    output.push_str(&format!("  OrderSysID: {}\n", resp.order_sys_id));
+                    output.push_str(&format!("  剩余数量: {}\n", resp.volume_remain));
                 }
                 Err(e) => {
                     output.push_str(&format!("❌ 失败: {}\n", e));
@@ -190,14 +190,14 @@ fn main() -> anyhow::Result<()> {
     output.push_str("【Step 6】限价开空仓 (Short) - 挂单价格低于市价\n");
     output.push_str("----------------------------------------\n");
     
-    let limit_price_short: f64 = current_price.parse().unwrap_or(0.0) - 10.0;
+    let limit_price_short = f64::from_str(&current_price).unwrap_or(0.0) - 10.0;
     output.push_str(&format!("  挂单价格: {} (市价 {} - 10)\n", limit_price_short, current_price));
     
-    match rt.block_on(client.limit_open(SYMBOL, TradeDirection::Short, volume, limit_price_short.into())) {
+    match rt.block_on(client.limit_open(SYMBOL, TradeDirection::Short, volume, Decimal::from_f64_retain(limit_price_short).unwrap_or_default())) {
         Ok(resp) => {
             output.push_str(&format!("✅ 限价开空仓请求已发送!\n"));
-            output.push_str(&format!("  OrderID: {}\n", resp.order_id));
-            output.push_str(&format!("  订单状态: {}\n", resp.status));
+            output.push_str(&format!("  OrderSysID: {}\n", resp.order_sys_id));
+            output.push_str(&format!("  挂单价格: {}\n", resp.price));
         }
         Err(e) => {
             output.push_str(&format!("❌ 失败: {}\n", e));
@@ -218,8 +218,12 @@ fn main() -> anyhow::Result<()> {
         Ok(orders) => {
             output.push_str(&format!("✅ 查询成功! 当前订单数: {}\n", orders.len()));
             for order in orders {
-                output.push_str(&format!("  - OrderID:{} 价格:{} 数量:{} 方向:{} 状态:{}\n", 
-                    order.order_id, order.price, order.volume, order.direction, order.status));
+                output.push_str(&format!("  - OrderSysID:{} 价格:{} 数量:{} 方向:{} 状态:{}\n", 
+                    order.order_sys_id, 
+                    order.price.as_deref().unwrap_or("N/A"),
+                    order.volume.as_deref().unwrap_or("N/A"),
+                    order.direction.as_deref().unwrap_or("N/A"),
+                    order.order_status.as_deref().unwrap_or("N/A")));
             }
         }
         Err(e) => {
@@ -236,17 +240,20 @@ fn main() -> anyhow::Result<()> {
     
     let pending_orders = rt.block_on(client.query_orders(Some(SYMBOL)))?
         .into_iter()
-        .filter(|o| o.status == "2" || o.status == "3") // 2=未成交, 3=部分成交
+        .filter(|o| {
+            let status = o.order_status.as_deref().unwrap_or("0");
+            status == "2" || status == "3" // 2=未成交, 3=部分成交
+        })
         .collect::<Vec<_>>();
 
     if pending_orders.is_empty() {
         output.push_str("  没有待成交订单，跳过撤单\n");
     } else {
         for order in pending_orders {
-            output.push_str(&format!("  撤单 OrderID: {}\n", order.order_id));
-            match rt.block_on(client.cancel_order(&order.order_id)) {
+            output.push_str(&format!("  撤单 OrderSysID: {}\n", order.order_sys_id));
+            match rt.block_on(client.cancel_order(&order.order_sys_id)) {
                 Ok(resp) => {
-                    output.push_str(&format!("  ✅ 撤单成功: {}\n", resp.order_id));
+                    output.push_str(&format!("  ✅ 撤单成功: {}\n", resp.order_sys_id));
                 }
                 Err(e) => {
                     output.push_str(&format!("  ❌ 撤单失败: {}\n", e));
@@ -274,16 +281,16 @@ fn main() -> anyhow::Result<()> {
     match short_position {
         Some(pos) => {
             let trade_unit_id = &pos.trade_unit_id;
-            let close_price: f64 = current_price.parse().unwrap_or(0.0) + 10.0;
+            let close_price = f64::from_str(&current_price).unwrap_or(0.0) + 10.0;
             output.push_str(&format!("  TradeUnitID: {}\n", trade_unit_id));
             output.push_str(&format!("  平仓价格: {} (市价 {} + 10)\n", close_price, current_price));
             
-            let volume: rust_decimal::Decimal = pos.position.parse().unwrap_or(0.0001.into());
-            match rt.block_on(client.limit_close(SYMBOL, TradeDirection::Short, volume, close_price.into(), trade_unit_id)) {
+            let vol: Decimal = pos.position.parse().unwrap_or(volume);
+            match rt.block_on(client.limit_close(SYMBOL, TradeDirection::Short, vol, Decimal::from_f64_retain(close_price).unwrap_or_default(), trade_unit_id)) {
                 Ok(resp) => {
                     output.push_str(&format!("✅ 限价平空仓请求已发送!\n"));
-                    output.push_str(&format!("  OrderID: {}\n", resp.order_id));
-                    output.push_str(&format!("  订单状态: {}\n", resp.status));
+                    output.push_str(&format!("  OrderSysID: {}\n", resp.order_sys_id));
+                    output.push_str(&format!("  挂单价格: {}\n", resp.price));
                 }
                 Err(e) => {
                     output.push_str(&format!("❌ 失败: {}\n", e));
@@ -310,7 +317,7 @@ fn main() -> anyhow::Result<()> {
             output.push_str(&format!("✅ 测试完成! 最终持仓数: {}\n", positions.len()));
             for pos in &positions {
                 output.push_str(&format!("  - {} 方向:{} 数量:{}\n", 
-                    pos.instrument_id, pos.direction, pos.volume));
+                    pos.instrument_id, pos.posi_direction, pos.position));
             }
             if positions.is_empty() {
                 output.push_str("  ✅ 所有仓位已平清!\n");
