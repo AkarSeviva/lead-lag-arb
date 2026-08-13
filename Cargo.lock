@@ -2035,6 +2035,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "exchange-adapter-lbank",
+ "reqwest",
  "tokio",
  "tracing",
  "tracing-subscriber",

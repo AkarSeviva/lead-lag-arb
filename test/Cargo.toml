@@ -12,9 +12,14 @@ path = "test_phase1.rs"
 name = "test_auth_debug"
 path = "test_auth_debug.rs"
 
+[[bin]]
+name = "print_headers"
+path = "print_headers.rs"
+
 [dependencies]
 exchange-adapter-lbank = { path = "../crates/exchange-adapter-lbank" }
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true
+reqwest.workspace = true
