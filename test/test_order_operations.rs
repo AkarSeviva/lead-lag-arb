@@ -14,19 +14,19 @@
 //! - Phase E: 限价开空 (带 TPSL) → 轮询等待挂单 → 撤单 → 轮询等待已撤
 //! - Phase F: 限价开多 (无 TPSL) → 轮询等待挂单 → 撤单
 //! - Phase G: 最终状态确认
+//!
+//! 运行：`cargo run --release --bin test_order_operations`
 
 use exchange_adapter_lbank::{
     auth::LbankSigner,
     client::LbankClient,
-    protocol::{
-        OrderInsertResponse, PositionResponse, TradeDirection,
-    },
+    protocol::{OrderInsertResponse, PositionResponse, TradeDirection},
     proxy::ProxyConfig,
 };
 use rust_decimal::Decimal;
 use std::str::FromStr;
 use std::time::{Duration, Instant};
-use std::{fs::File, io::Write, sync::Arc};
+use std::{fs::File, io::Write};
 use tracing::{debug, warn};
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -112,15 +112,17 @@ impl TestReporter {
 // ============================================================================
 
 /// 轮询直到 predicate 返回 true 或超时
+///
+/// ⚠️ 此函数本身是 async，必须在 tokio runtime 内被 `.await`。
+/// **不要**在 sync context / `runtime.block_on` 内调用它，会触发 abort。
 pub async fn poll_until<F, Fut>(
-    rt: &tokio::runtime::Runtime,
     label: &str,
-    predicate: F,
+    mut predicate: F,
     timeout: Duration,
     interval: Duration,
 ) -> bool
 where
-    F: Fn() -> Fut,
+    F: FnMut() -> Fut,
     Fut: std::future::Future<Output = bool>,
 {
     let start = Instant::now();
@@ -136,9 +138,7 @@ where
             );
             return true;
         }
-        rt.block_on(async {
-            tokio::time::sleep(interval).await;
-        });
+        tokio::time::sleep(interval).await;
     }
     warn!(
         label = label,
@@ -181,7 +181,7 @@ pub async fn op_market_open(
     Ok(resp)
 }
 
-/// **op_market_close**：市价平仓 (reduce-only，direction = 持仓方向，不再反转)
+/// **op_market_close**：市价平仓 (direction = 持仓方向)
 pub async fn op_market_close(
     client: &LbankClient,
     symbol: &str,
@@ -195,7 +195,7 @@ pub async fn op_market_close(
         symbol = %symbol,
         volume = %volume,
         trade_unit_id = %trade_unit_id,
-        "op_market_close start (direction=持仓方向，reduce-only)"
+        "op_market_close start (direction=持仓方向)"
     );
     let resp = client
         .market_close(symbol, position_direction, volume, trade_unit_id)
@@ -209,6 +209,99 @@ pub async fn op_market_close(
         "op_market_close success"
     );
     Ok(resp)
+}
+
+/// **op_market_close_with_fallback**：智能平仓 (默认 direction=持仓方向，失败回退到反方向)
+///
+/// 背景知识 (摘自 `订单逆向.md`，实测 Lbank cfd/v1.0 API)：
+/// - 开多:  `direction=0, OffsetFlag=0` → 响应 `posiDirection=0` (Long)
+/// - 开空:  `direction=1, OffsetFlag=0` → 响应 `posiDirection=1` (Short)
+/// - 平多仓: 实测 direction=0 + OffsetFlag=5 时报错 code=31 "超过可平量"  ← 不对
+/// - 平空仓: 实测 direction=0 + OffsetFlag=5 时成功 (from 订单逆向.md:174)
+///   —— 即平空是用 direction=0, 平空的持仓 posiDirection=1
+/// 综合得出 **Lbank 平仓 direction 取值与持仓方向相反**：
+///   平多仓 (posiDir=0) → direction=1, OffsetFlag=5
+///   平空仓 (posiDir=1) → direction=0, OffsetFlag=5
+///
+/// 为了稳妥起见，这里先按文档 (`direction = 持仓方向`) 试一次，失败后再试反方向。
+pub async fn op_market_close_with_fallback(
+    client: &LbankClient,
+    symbol: &str,
+    position_direction: TradeDirection,
+    volume: Decimal,
+    trade_unit_id: &str,
+    reporter: &mut TestReporter,
+) -> anyhow::Result<OrderInsertResponse> {
+    let opp_dir = match position_direction {
+        TradeDirection::Long => TradeDirection::Short,
+        TradeDirection::Short => TradeDirection::Long,
+    };
+
+    // 尝试 1: direction = 反方向 (基于订单逆向.md 实测：平空=0, 平多=1)
+    let opp_label = format!("market_close_opp_d{:?}", opp_dir);
+    debug!(
+        label = %opp_label,
+        symbol = %symbol,
+        volume = %volume,
+        trade_unit_id = %trade_unit_id,
+        offset_flag = "5",
+        direction = ?opp_dir,
+        "flat: 尝试 1 (direction=反方向, 来源: 订单逆向.md 实测)"
+    );
+    let opp_err: Option<anyhow::Error> = match op_market_close(
+        client, symbol, opp_dir, volume, trade_unit_id,
+    ).await {
+        Ok(r) => {
+            reporter.success(&format!(
+                "市价平仓成功 (direction=反方向, 来源订单逆向.md): order_sys_id={}, trade_price={}, close_profit={}",
+                r.order_sys_id, r.trade_price, r.close_profit
+            ));
+            return Ok(r);
+        }
+        Err(e) => {
+            warn!(
+                label = %opp_label,
+                error = %e,
+                "flat close opposite-direction failed; will try same-direction"
+            );
+            reporter.warn(&format!(
+                "direction=反方向 失败 ({:#?}); 切换尝试 direction=持仓方向",
+                e
+            ));
+            Some(e)
+        }
+    };
+
+    // 尝试 2: direction = 持仓方向 (文档理论)
+    let pos_label = format!("market_close_pos_d{:?}", position_direction);
+    debug!(
+        label = %pos_label,
+        symbol = %symbol,
+        volume = %volume,
+        trade_unit_id = %trade_unit_id,
+        offset_flag = "5",
+        direction = ?position_direction,
+        "flat: 尝试 2 (direction=持仓方向)"
+    );
+    match op_market_close(client, symbol, position_direction, volume, trade_unit_id).await {
+        Ok(r) => {
+            reporter.success(&format!(
+                "市价平仓成功 (direction=持仓方向!): order_sys_id={}, close_profit={}",
+                r.order_sys_id, r.close_profit
+            ));
+            Ok(r)
+        }
+        Err(e2) => {
+            // 再次尝试失败：合并两个错误报告，方便诊断
+            let diag = format!(
+                "市价平仓两个方向都失败: opp_err={:#?}, pos_err={:#?}",
+                opp_err.as_ref().map(|e| format!("{:#?}", e)).unwrap_or_else(|| "<无>".to_string()),
+                e2
+            );
+            reporter.fail(&diag);
+            Err(e2)
+        }
+    }
 }
 
 /// **op_limit_open**：限价开仓
@@ -298,7 +391,6 @@ pub async fn op_query_pending_orders(
 
 /// **op_wait_for_position**：轮询等到指定方向和数量的持仓出现
 pub async fn op_wait_for_position(
-    rt: &tokio::runtime::Runtime,
     client: &LbankClient,
     expected_direction: TradeDirection,
     expected_min_volume: Decimal,
@@ -343,9 +435,7 @@ pub async fn op_wait_for_position(
                 warn!(label = %label, error = %e, "query_positions failed during wait");
             }
         }
-        rt.block_on(async {
-            tokio::time::sleep(DEFAULT_POLL_INTERVAL).await;
-        });
+        tokio::time::sleep(DEFAULT_POLL_INTERVAL).await;
     }
     warn!(label = %label, attempts = attempts, "wait_for_position timeout");
     None
@@ -353,7 +443,6 @@ pub async fn op_wait_for_position(
 
 /// **op_wait_for_no_position**：轮询等到某方向持仓数量归零
 pub async fn op_wait_for_no_position(
-    rt: &tokio::runtime::Runtime,
     client: &LbankClient,
     expected_direction: TradeDirection,
 ) -> bool {
@@ -363,7 +452,6 @@ pub async fn op_wait_for_no_position(
         TradeDirection::Short => "1",
     };
     poll_until(
-        rt,
         &label,
         || async {
             match op_get_positions(client).await {
@@ -386,7 +474,6 @@ pub async fn op_wait_for_no_position(
 
 /// **op_wait_for_pending_orders**：轮询等到指定数量的 pending 挂单 (orderStatus="2"|"3")
 pub async fn op_wait_for_pending_orders(
-    rt: &tokio::runtime::Runtime,
     client: &LbankClient,
     symbol: &str,
     expected_count: usize,
@@ -421,9 +508,7 @@ pub async fn op_wait_for_pending_orders(
                 warn!(label = %label, error = %e, "query_orders failed during wait");
             }
         }
-        rt.block_on(async {
-            tokio::time::sleep(DEFAULT_POLL_INTERVAL).await;
-        });
+        tokio::time::sleep(DEFAULT_POLL_INTERVAL).await;
     }
     warn!(label = %label, attempts = attempts, "wait_for_pending_orders timeout");
     Vec::new()
@@ -483,7 +568,6 @@ pub fn op_print_position_summary(positions: &[PositionResponse]) -> String {
 // ============================================================================
 
 async fn phase_a_status_and_cleanup(
-    _rt: &tokio::runtime::Runtime,
     client: &LbankClient,
     reporter: &mut TestReporter,
 ) {
@@ -502,7 +586,6 @@ async fn phase_a_status_and_cleanup(
 }
 
 async fn phase_b_market_long_roundtrip(
-    rt: &tokio::runtime::Runtime,
     client: &LbankClient,
     reporter: &mut TestReporter,
 ) {
@@ -524,7 +607,7 @@ async fn phase_b_market_long_roundtrip(
     ));
 
     // B2: 轮询等待持仓出现
-    let pos = op_wait_for_position(rt, client, TradeDirection::Long, volume).await;
+    let pos = op_wait_for_position(client, TradeDirection::Long, volume).await;
     let trade_unit_id = match pos {
         Some(p) => {
             let tid = p.trade_unit_id.clone().unwrap_or_default();
@@ -538,25 +621,26 @@ async fn phase_b_market_long_roundtrip(
         }
     };
 
-    // B3: 市价平多 (reduce-only: direction = Long)
-    match op_market_close(
+    // B3: 市价平多 (智能回退：先 direction=Long，失败回退到 direction=Short)
+    match op_market_close_with_fallback(
         client,
         SYMBOL,
         TradeDirection::Long,
         volume,
         &trade_unit_id,
+        reporter,
     )
     .await
     {
-        Ok(r) => reporter.success(&format!(
-            "市价平多成功: order_sys_id={}, close_profit={}",
-            r.order_sys_id, r.close_profit
+        Ok(r) => reporter.info(&format!(
+            "close_profit={}, volumeTraded={}",
+            r.close_profit, r.volume_traded
         )),
-        Err(e) => reporter.fail(&format!("市价平多失败: {:#?}", e)),
+        Err(_) => { /* already logged by fallback */ }
     }
 
     // B4: 轮询等待持仓归零
-    if op_wait_for_no_position(rt, client, TradeDirection::Long).await {
+    if op_wait_for_no_position(client, TradeDirection::Long).await {
         reporter.success("多仓已平");
     } else {
         reporter.warn("轮询等待多仓归零超时");
@@ -565,7 +649,6 @@ async fn phase_b_market_long_roundtrip(
 }
 
 async fn phase_c_market_short_roundtrip(
-    rt: &tokio::runtime::Runtime,
     client: &LbankClient,
     reporter: &mut TestReporter,
 ) {
@@ -585,7 +668,7 @@ async fn phase_c_market_short_roundtrip(
         open_resp.order_sys_id, open_resp.trade_price
     ));
 
-    let pos = op_wait_for_position(rt, client, TradeDirection::Short, volume).await;
+    let pos = op_wait_for_position(client, TradeDirection::Short, volume).await;
     let trade_unit_id = match pos {
         Some(p) => {
             let tid = p.trade_unit_id.clone().unwrap_or_default();
@@ -599,24 +682,25 @@ async fn phase_c_market_short_roundtrip(
         }
     };
 
-    // 平空：direction = Short (持仓方向)
-    match op_market_close(
+    // 平空：智能回退，先 direction=Long (反方向)，失败回退到 direction=Short (持仓方向)
+    match op_market_close_with_fallback(
         client,
         SYMBOL,
         TradeDirection::Short,
         volume,
         &trade_unit_id,
+        reporter,
     )
     .await
     {
-        Ok(r) => reporter.success(&format!(
-            "市价平空成功: order_sys_id={}, close_profit={}",
-            r.order_sys_id, r.close_profit
+        Ok(r) => reporter.info(&format!(
+            "close_profit={}, volumeTraded={}",
+            r.close_profit, r.volume_traded
         )),
-        Err(e) => reporter.fail(&format!("市价平空失败: {:#?}", e)),
+        Err(_) => { /* already logged by fallback */ }
     }
 
-    if op_wait_for_no_position(rt, client, TradeDirection::Short).await {
+    if op_wait_for_no_position(client, TradeDirection::Short).await {
         reporter.success("空仓已平");
     } else {
         reporter.warn("轮询等待空仓归零超时");
@@ -625,7 +709,6 @@ async fn phase_c_market_short_roundtrip(
 }
 
 async fn phase_d_limit_long_with_tpsl(
-    _rt: &tokio::runtime::Runtime,
     client: &LbankClient,
     reporter: &mut TestReporter,
 ) {
@@ -679,7 +762,6 @@ async fn phase_d_limit_long_with_tpsl(
 }
 
 async fn phase_e_limit_short_with_tpsl(
-    _rt: &tokio::runtime::Runtime,
     client: &LbankClient,
     reporter: &mut TestReporter,
 ) {
@@ -730,7 +812,6 @@ async fn phase_e_limit_short_with_tpsl(
 }
 
 async fn phase_f_limit_long_no_tpsl_and_cancel(
-    rt: &tokio::runtime::Runtime,
     client: &LbankClient,
     reporter: &mut TestReporter,
 ) {
@@ -758,7 +839,7 @@ async fn phase_f_limit_long_no_tpsl_and_cancel(
     ));
 
     // 轮询等待挂单出现
-    let pending = op_wait_for_pending_orders(rt, client, SYMBOL, 1).await;
+    let pending = op_wait_for_pending_orders(client, SYMBOL, 1).await;
     if pending.is_empty() {
         reporter.warn("未检测到 pending 挂单（可能服务端尚未挂出）");
     } else {
@@ -776,7 +857,6 @@ async fn phase_f_limit_long_no_tpsl_and_cancel(
 }
 
 async fn phase_g_final_state(
-    _rt: &tokio::runtime::Runtime,
     client: &LbankClient,
     reporter: &mut TestReporter,
 ) {
@@ -815,7 +895,8 @@ async fn phase_g_final_state(
 // Main
 // ============================================================================
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main(flavor = "multi_thread")]
+async fn main() -> anyhow::Result<()> {
     // 初始化日志 - 输出到 stderr (这样 >file 2>&1 可以同时重定向)
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::DEBUG)
@@ -838,24 +919,20 @@ fn main() -> anyhow::Result<()> {
 
     // 创建客户端
     let proxy_config = ProxyConfig::default();
-    let client = Arc::new(LbankClient::with_base_url_and_proxy(
+    let client = LbankClient::with_base_url_and_proxy(
         signer,
         "https://uuapi.rerrkvifj.com",
         proxy_config,
-    )?);
-
-    let rt = tokio::runtime::Runtime::new()?;
+    )?;
 
     // 串行运行各 Phase (每个 phase 互相独立)
-    rt.block_on(async {
-        phase_a_status_and_cleanup(&rt, client.as_ref(), &mut reporter).await;
-        phase_b_market_long_roundtrip(&rt, client.as_ref(), &mut reporter).await;
-        phase_c_market_short_roundtrip(&rt, client.as_ref(), &mut reporter).await;
-        phase_d_limit_long_with_tpsl(&rt, client.as_ref(), &mut reporter).await;
-        phase_e_limit_short_with_tpsl(&rt, client.as_ref(), &mut reporter).await;
-        phase_f_limit_long_no_tpsl_and_cancel(&rt, client.as_ref(), &mut reporter).await;
-        phase_g_final_state(&rt, client.as_ref(), &mut reporter).await;
-    });
+    phase_a_status_and_cleanup(&client, &mut reporter).await;
+    phase_b_market_long_roundtrip(&client, &mut reporter).await;
+    phase_c_market_short_roundtrip(&client, &mut reporter).await;
+    phase_d_limit_long_with_tpsl(&client, &mut reporter).await;
+    phase_e_limit_short_with_tpsl(&client, &mut reporter).await;
+    phase_f_limit_long_no_tpsl_and_cancel(&client, &mut reporter).await;
+    phase_g_final_state(&client, &mut reporter).await;
 
     let filename = "test_order_result.txt";
     reporter.write_to(filename)?;

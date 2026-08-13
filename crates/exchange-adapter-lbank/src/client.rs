@@ -87,6 +87,8 @@ impl LbankClient {
         let url = format!("{}{}", self.base_url, path);
 
         debug!(url = %url, body = %body_str, "POST request");
+        // 额外用 INFO 输出，作为 payload summary，方便 grep / 不依赖 tracing 配置
+        tracing::info!(target: "lbank_api_payload", path = %path, body = %body_str, "▶ Lbank POST payload");
 
         let response = self
             .client
