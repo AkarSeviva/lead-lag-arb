@@ -728,30 +728,44 @@ impl LbankClient {
         }).await
     }
 
-    /// 查询当前订单
-    pub async fn query_orders(&self, symbol: Option<&str>) -> Result<Vec<OrderResponse>> {
-        let mut params = vec![
+    /// 查询当前**所有挂单** (不限 symbol)
+    ///
+    /// ⚠️ **实测修正**（来自 `限价单挂单.md:121-274`）：**不要**在 URL 里加
+    /// `InstrumentID=<symbol>` 过滤条件！Lbank 后端在带 InstrumentID 时**只返回
+    /// 已成交订单 (status=1, status=5 等)**，而**不会返回 status=4 的限价挂单**。
+    /// 只有不带 InstrumentID 时才能查到 status=4 的限价挂单。
+    ///
+    /// 如果需要过滤某交易对，请在客户端侧 `Vec<OrderResponse>` 上 filter：
+    /// ```ignore
+    /// let orders = client.query_orders().await?;
+    /// let btc: Vec<_> = orders.iter().filter(|o| o.instrument_id == "BTCUSDT").collect();
+    /// ```
+    ///
+    /// 返回的订单状态：
+    /// - `orderStatus="1"` 已成交 (limit order 全部或部分成交)
+    /// - `orderStatus="4"` 已挂单 (active limit order) ← 我们关心的
+    /// - `orderStatus="5"` 部分成交
+    /// - `orderStatus="6"` 已撤单
+    /// - `orderStatus="0"` 全部撤销
+    pub async fn query_orders(&self) -> Result<Vec<OrderResponse>> {
+        let params: &[(&str, &str)] = &[
             ("ProductGroup", "SwapU"),
             ("ExchangeID", "Exchange"),
             ("pageIndex", "1"),
             ("pageSize", "1000"),
         ];
 
-        if let Some(s) = symbol {
-            params.push(("InstrumentID", s));
-        }
+        let body_text = self.get_raw("/cfd/query/v1.0/Order", Some(params)).await?;
 
-        let body_text = self.get_raw("/cfd/query/v1.0/Order", Some(&params)).await?;
-        
         // 解析 JSON，处理两种可能的格式
         let json: serde_json::Value = serde_json::from_str(&body_text)?;
-        
+
         let code = json.get("code").and_then(|v| v.as_i64()).unwrap_or(0);
         if code != 200 {
             let msg = json.get("message").and_then(|v| v.as_str()).unwrap_or("Unknown error");
             anyhow::bail!("API error: {} - {}", code, msg);
         }
-        
+
         // 提取 data 字段
         let data_array = if let Some(arr) = json.get("data").and_then(|d| d.get("data")).and_then(|d| d.as_array()) {
             arr.clone()
@@ -760,9 +774,21 @@ impl LbankClient {
         } else {
             return Ok(Vec::new());
         };
-        
+
         let orders: Vec<OrderResponse> = serde_json::from_value(serde_json::Value::Array(data_array))?;
         Ok(orders)
+    }
+
+    /// 查询某 symbol 的挂单 (客户端侧 filter)
+    ///
+    /// 内部调用 `query_orders()` 然后按 `instrument_id` 过滤。
+    /// Lbank 的 Order 接口不支持 server-side InstrumentID 过滤 (会漏掉挂单)。
+    pub async fn query_orders_for_symbol(&self, symbol: &str) -> Result<Vec<OrderResponse>> {
+        let all = self.query_orders().await?;
+        Ok(all
+            .into_iter()
+            .filter(|o| o.instrument_id == symbol)
+            .collect())
     }
 
     // ========================================================================

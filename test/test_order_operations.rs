@@ -371,14 +371,17 @@ pub async fn op_cancel_order(
     Ok(resp)
 }
 
-/// **op_query_pending_orders**：查询当前挂单
+/// **op_query_pending_orders**：查询某 symbol 的挂单 (客户端侧过滤)
+///
+/// ⚠️ 实测修正：Lbank Order 接口不支持 server-side InstrumentID 过滤
+/// (带 InstrumentID 会漏掉 status=4 挂单)。这里先查全部再按 symbol 过滤。
 pub async fn op_query_pending_orders(
     client: &LbankClient,
     symbol: &str,
 ) -> anyhow::Result<Vec<exchange_adapter_lbank::protocol::OrderResponse>> {
     debug!(symbol = %symbol, "op_query_pending_orders start");
-    let orders = client.query_orders(Some(symbol)).await?;
-    debug!(count = orders.len(), "op_query_pending_orders done");
+    let orders = client.query_orders_for_symbol(symbol).await?;
+    debug!(count = orders.len(), symbol = %symbol, "op_query_pending_orders done");
     Ok(orders)
 }
 
@@ -419,10 +422,8 @@ pub async fn op_query_pending_orders_with_retry(
     anyhow::bail!("op_query_pending_orders_with_retry: exceeded max_attempts")
 }
 
-/// **op_query_pending_orders_raw**：直接走 GET /cfd/query/v1.0/Order
-///
-/// 与 `op_query_pending_orders` 相同，但保留 raw body text 用于 debug。
-/// 返回 (raw_body_text, parsed_orders)
+/// **op_query_pending_orders_raw**：返回 raw body text 和 parsed orders
+/// 用于诊断 Lbank 接口真实响应内容
 pub async fn op_query_pending_orders_raw(
     client: &LbankClient,
     symbol: &str,
@@ -430,18 +431,16 @@ pub async fn op_query_pending_orders_raw(
     String,
     Vec<exchange_adapter_lbank::protocol::OrderResponse>,
 )> {
-    let mut params: Vec<(&str, &str)> = vec![
+    // 不带 InstrumentID (避免 Lbank 后端过滤掉 status=4 挂单)
+    let params: &[(&str, &str)] = &[
         ("ProductGroup", "SwapU"),
         ("ExchangeID", "Exchange"),
         ("pageIndex", "1"),
         ("pageSize", "1000"),
     ];
-    let symbol_owned = symbol.to_string();
-    if !symbol_owned.is_empty() {
-        params.push(("InstrumentID", symbol_owned.as_str()));
-    }
-    let raw = client.get_raw("/cfd/query/v1.0/Order", Some(&params)).await?;
-    let parsed = op_query_pending_orders(client, symbol).await.unwrap_or_default();
+    let raw = client.get_raw("/cfd/query/v1.0/Order", Some(params)).await?;
+    // 在客户端侧按 symbol 过滤
+    let parsed = client.query_orders_for_symbol(symbol).await.unwrap_or_default();
     Ok((raw, parsed))
 }
 
