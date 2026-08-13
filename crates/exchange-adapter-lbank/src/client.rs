@@ -486,7 +486,12 @@ impl LbankClient {
 
     /// 查询当前持仓 - 文档5.1
     pub async fn query_positions(&self) -> Result<Vec<PositionResponse>> {
-        self.get(
+        #[derive(Deserialize)]
+        struct PositionListResponse {
+            data: Vec<PositionResponse>,
+        }
+        
+        let resp: LbankResponse<PositionListResponse> = self.get(
             "/cfd/query/v1.0/Position",
             Some(&[
                 ("ProductGroup", "SwapU"),
@@ -494,7 +499,9 @@ impl LbankClient {
                 ("pageIndex", "1"),
                 ("pageSize", "1000"),
             ]),
-        ).await
+        ).await?;
+        
+        Ok(resp.into_result()?.data)
     }
 
     /// 查询触发单 - 文档4.3
@@ -570,6 +577,11 @@ impl LbankClient {
 
     /// 查询当前订单
     pub async fn query_orders(&self, symbol: Option<&str>) -> Result<Vec<OrderResponse>> {
+        #[derive(Deserialize)]
+        struct OrderListResponse {
+            data: Vec<OrderResponse>,
+        }
+        
         let mut params = vec![
             ("ProductGroup", "SwapU"),
             ("ExchangeID", "Exchange"),
@@ -581,7 +593,8 @@ impl LbankClient {
             params.push(("InstrumentID", s));
         }
 
-        self.get("/cfd/query/v1.0/Order", Some(&params)).await
+        let resp: LbankResponse<OrderListResponse> = self.get("/cfd/query/v1.0/Order", Some(&params)).await?;
+        Ok(resp.into_result()?.data)
     }
 
     // ========================================================================
