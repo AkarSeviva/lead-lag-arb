@@ -180,7 +180,7 @@ pub struct WsTokenResponse {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OrderInsertRequest {
-    #[serde(rename = "InstrumentID")]
+    #[serde(rename = "instrumentID")]
     pub instrument_id: String,
     #[serde(rename = "ExchangeID")]
     pub exchange_id: String,
@@ -289,7 +289,7 @@ impl OrderInsertRequest {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CloseOrderInsertRequest {
-    #[serde(rename = "InstrumentID")]
+    #[serde(rename = "instrumentID")]
     pub instrument_id: String,
     #[serde(rename = "ExchangeID")]
     pub exchange_id: String,
@@ -375,7 +375,7 @@ pub struct PositionResponse {
     pub position_id: String,          // 持仓ID
     #[serde(rename = "TradeUnitID")]
     pub trade_unit_id: String,       // 交易单元ID (平仓必需)
-    #[serde(rename = "InstrumentID")]
+    #[serde(rename = "instrumentID")]
     pub instrument_id: String,
     #[serde(rename = "ExchangeID")]
     pub exchange_id: String,
@@ -414,25 +414,30 @@ pub struct PositionResponse {
 pub struct OrderResponse {
     #[serde(rename = "orderSysID")]
     pub order_sys_id: String,
-    #[serde(rename = "instrumentId")]
+    #[serde(rename = "instrumentID")]
     pub instrument_id: String,
     pub direction: Option<String>,
+    #[serde(rename = "offsetFlag")]
     pub offset_flag: Option<String>,
+    #[serde(rename = "orderType")]
     pub order_type: Option<String>,
+    #[serde(rename = "orderStatus")]
     pub order_status: Option<String>,
     pub volume: Option<String>,
     pub price: Option<String>,
-    #[serde(rename = "tradedVolume")]
+    #[serde(rename = "volumeTraded")]
     pub traded_volume: Option<String>,
-    #[serde(rename = "avgPrice")]
-    pub avg_price: Option<String>,
-    #[serde(rename = "orderInsertTime")]
-    pub order_insert_time: Option<i64>,
-    #[serde(rename = "closeProfit")]
-    pub close_profit: Option<String>,  // 平仓盈亏
-    pub fee: Option<String>,            // 手续费
-    #[serde(rename = "volumeCancled")]
-    pub volume_cancled: Option<String>, // 已撤数量
+    #[serde(rename = "openPrice")]
+    pub open_price: Option<String>,
+    pub fee: Option<String>,
+    #[serde(rename = "businessNo")]
+    pub business_no: Option<String>,
+    #[serde(rename = "tradePrice")]
+    pub trade_price: Option<String>,
+    #[serde(rename = "positionID")]
+    pub position_id: Option<String>,
+    #[serde(rename = "tradeUnitID")]
+    pub trade_unit_id: Option<String>,
 }
 
 /// History Order Response (历史委托) - 文档5.3
@@ -440,15 +445,18 @@ pub struct OrderResponse {
 pub struct HistoryOrderResponse {
     #[serde(rename = "orderSysID")]
     pub order_sys_id: String,
-    #[serde(rename = "instrumentId")]
+    #[serde(rename = "instrumentID")]
     pub instrument_id: String,
     pub direction: Option<String>,
+    #[serde(rename = "offsetFlag")]
     pub offset_flag: Option<String>,
+    #[serde(rename = "orderType")]
     pub order_type: Option<String>,
+    #[serde(rename = "orderStatus")]
     pub order_status: Option<String>,
     pub volume: Option<String>,
     pub price: Option<String>,
-    #[serde(rename = "tradedVolume")]
+    #[serde(rename = "volumeTraded")]
     pub traded_volume: Option<String>,
     #[serde(rename = "tradePrice")]
     pub trade_price: Option<String>,
@@ -461,6 +469,12 @@ pub struct HistoryOrderResponse {
     pub insert_time: Option<i64>,
     #[serde(rename = "volumeCancled")]
     pub volume_cancled: Option<String>,
+    #[serde(rename = "businessNo")]
+    pub business_no: Option<String>,
+    #[serde(rename = "positionID")]
+    pub position_id: Option<String>,
+    #[serde(rename = "tradeUnitID")]
+    pub trade_unit_id: Option<String>,
 }
 
 /// Trade Response (历史成交) - 文档5.2
@@ -628,7 +642,7 @@ pub struct MarketOrderItem {
     pub price: String,
     #[serde(rename = "Volume")]
     pub volume: String,
-    #[serde(rename = "InstrumentID")]
+    #[serde(rename = "instrumentID")]
     pub instrument_id: String,
     #[serde(rename = "Direction")]
     pub direction: String, // "0" = Ask, "1" = Bid
