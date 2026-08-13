@@ -98,6 +98,7 @@ impl LbankClient {
             .context("Request failed")?;
 
         let status = response.status();
+        // reqwest 会自动解压 brotli/gzip/deflate 响应
         let body_text = response.text().await.context("Failed to read response")?;
 
         debug!(status = %status, body = %body_text);
@@ -143,6 +144,7 @@ impl LbankClient {
         let response = req_builder.send().await.context("Request failed")?;
 
         let status = response.status();
+        // reqwest 会自动解压 brotli/gzip/deflate 响应
         let body_text = response.text().await.context("Failed to read response")?;
 
         debug!(status = %status, body = %body_text);
