@@ -458,30 +458,38 @@ pub struct PositionQueryRequest {
 }
 
 /// Position Query Response - 文档5.1确认
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 pub struct PositionResponse {
     #[serde(rename = "PositionID")]
-    pub position_id: String,          // 持仓ID
+    pub position_id: Option<String>,          // 持仓ID
     #[serde(rename = "TradeUnitID")]
-    pub trade_unit_id: String,       // 交易单元ID (平仓必需)
-    #[serde(rename = "instrumentID")]
-    pub instrument_id: String,
+    pub trade_unit_id: Option<String>,        // 交易单元ID (平仓必需)
+    #[serde(rename = "InstrumentID")]
+    pub instrument_id: Option<String>,
+    #[serde(rename = "ProductGroup")]
+    pub product_group: Option<String>,
+    #[serde(rename = "positionType")]
+    pub position_type: Option<i32>,
     #[serde(rename = "ExchangeID")]
-    pub exchange_id: String,
+    pub exchange_id: Option<String>,
+    #[serde(rename = "BusinessNo")]
+    pub business_no: Option<String>,
     #[serde(rename = "PosiDirection")]
-    pub posi_direction: String,     // "0"=多, "1"=空
+    pub posi_direction: Option<String>,        // "0"=多, "1"=空
     #[serde(rename = "Position")]
-    pub position: String,            // 持仓数量
+    pub position: Option<String>,             // 持仓数量
     #[serde(rename = "OpenPrice")]
-    pub open_price: String,          // 开仓均价
+    pub open_price: Option<String>,           // 开仓均价
     #[serde(rename = "PositionCost")]
-    pub position_cost: String,      // 持仓成本
+    pub position_cost: Option<String>,        // 持仓成本
     #[serde(rename = "UseMargin")]
-    pub use_margin: String,         // 已用保证金
+    pub use_margin: Option<String>,           // 已用保证金
     #[serde(rename = "Leverage")]
-    pub leverage: Option<String>,      // 杠杆
+    pub leverage: Option<String>,             // 杠杆
     #[serde(rename = "estimateLiquidationPrice")]
     pub estimate_liquidation_price: Option<String>,  // 预估强平价
+    #[serde(rename = "FORCECLOSEPRICE")]
+    pub force_close_price: Option<String>,
     #[serde(rename = "CloseProfit")]
     pub close_profit: Option<String>,
     #[serde(rename = "Currency")]
@@ -496,6 +504,54 @@ pub struct PositionResponse {
     pub position_fee: Option<String>,
     #[serde(rename = "TradeFee")]
     pub trade_fee: Option<String>,
+    #[serde(rename = "BeginTime")]
+    pub begin_time: Option<String>,
+    #[serde(rename = "UpdateTime")]
+    pub update_time: Option<String>,
+    #[serde(rename = "InsertTime")]
+    pub insert_time: Option<String>,
+    #[serde(rename = "Remark")]
+    pub remark: Option<String>,
+    #[serde(rename = "UserID")]
+    pub user_id: Option<String>,
+    #[serde(rename = "AccountID")]
+    pub account_id: Option<String>,
+    #[serde(rename = "MemberID")]
+    pub member_id: Option<String>,
+    #[serde(rename = "ClearCurrency")]
+    pub clear_currency: Option<String>,
+    #[serde(rename = "PriceCurrency")]
+    pub price_currency: Option<String>,
+    #[serde(rename = "SettlementGroup")]
+    pub settlement_group: Option<String>,
+    #[serde(rename = "AdlLevel")]
+    pub adl_level: Option<i32>,
+    #[serde(rename = "HighestPosition")]
+    pub highest_position: Option<String>,
+    #[serde(rename = "TotalCloseProfit")]
+    pub total_close_profit: Option<String>,
+    #[serde(rename = "TotalPositionCost")]
+    pub total_position_cost: Option<String>,
+    #[serde(rename = "ClosePosition")]
+    pub close_position: Option<String>,
+    #[serde(rename = "PrePosition")]
+    pub pre_position: Option<String>,
+    #[serde(rename = "LongFrozen")]
+    pub long_frozen: Option<String>,
+    #[serde(rename = "ShortFrozen")]
+    pub short_frozen: Option<String>,
+    #[serde(rename = "PreLongFrozen")]
+    pub pre_long_frozen: Option<String>,
+    #[serde(rename = "PreShortFrozen")]
+    pub pre_short_frozen: Option<String>,
+    #[serde(rename = "LongFrozenMargin")]
+    pub long_frozen_margin: Option<String>,
+    #[serde(rename = "ShortFrozenMargin")]
+    pub short_frozen_margin: Option<String>,
+    #[serde(rename = "ReserveMode")]
+    pub reserve_mode: Option<String>,
+    #[serde(rename = "ReserveUse")]
+    pub reserve_use: Option<String>,
 }
 
 /// Order Query Response - 文档5.3
