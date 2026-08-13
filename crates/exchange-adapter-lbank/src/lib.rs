@@ -14,8 +14,8 @@ pub mod ws;
 
 pub use auth::LbankSigner;
 pub use client::LbankClient;
-pub use market::{LbankMarketData, MarketEvent};
+pub use market::{LbankMarketData, MarketDataCache, MarketEvent};
 pub use orders::{LbankOrderManager, OrderEvent};
 pub use protocol::*;
 pub use proxy::{ProxyClient, ProxyConfig};
-pub use ws::LbankWebSocket;
+pub use ws::{LbankWebSocket, MarketData, WsEvent};

@@ -7,5 +7,5 @@ pub mod strategy;
 pub mod types;
 
 pub use env::{get, init, optional, require};
-pub use strategy::{StrategyConfig, NetworkConfig};
+pub use strategy::{StrategyConfig, NetworkConfig, FeeConfig, CapitalConfig};
 pub use types::*;

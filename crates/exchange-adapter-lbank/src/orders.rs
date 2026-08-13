@@ -4,14 +4,14 @@
 
 use crate::client::LbankClient;
 use crate::protocol::{OffsetFlag, OrderInsertResponse, TradeDirection};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use parking_lot::RwLock;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info};
 use uuid::Uuid;
 
 /// Order state machine
@@ -29,12 +29,15 @@ pub enum OrderState {
 impl From<&str> for OrderState {
     fn from(s: &str) -> Self {
         match s {
-            "0" | "submitting" => Self::Pending,
-            "1" | "submitted" | "new" => Self::Submitted,
-            "2" | "partial_fill" => Self::PartiallyFilled,
-            "3" | "filled" | "complete" => Self::Filled,
-            "4" | "cancelled" | "canceled" => Self::Cancelled,
-            "5" | "rejected" | "error" => Self::Rejected,
+            "0" | "submitting" => Self::Pending,     // 准备
+            "1" | "submitted" | "new" => Self::Filled,  // 全部成交
+            "2" | "partial_fill" => Self::PartiallyFilled,  // 部分成交
+            "3" | "filled" | "complete" => Self::Cancelled,  // 部分成交已撤销
+            "4" | "cancelled" | "canceled" => Self::Cancelled,  // 已撤销/已触发
+            "5" | "rejected" | "error" => Self::Rejected,  // 失败
+            "6" => Self::Cancelled,  // 已撤销
+            "7" => Self::Pending,  // 等待触发
+            "8" => Self::Pending,  // 触发中
             _ => Self::Unknown,
         }
     }
@@ -101,12 +104,11 @@ impl LbankOrderManager {
         rx
     }
 
-    /// Submit a market order
+    /// Submit a market order (开仓)
     pub async fn submit_market_order(
         &self,
         symbol: &str,
         side: TradeDirection,
-        offset: OffsetFlag,
         volume: Decimal,
     ) -> Result<String> {
         let client_order_id = Uuid::new_v4().to_string();
@@ -119,7 +121,7 @@ impl LbankOrderManager {
                 exchange_order_id: None,
                 symbol: symbol.to_string(),
                 side,
-                offset,
+                offset: OffsetFlag::Open,
                 volume,
                 filled_volume: Decimal::ZERO,
                 avg_price: None,
@@ -130,7 +132,7 @@ impl LbankOrderManager {
         }
 
         // Place the order
-        let response = self.client.place_market_order(symbol, side, offset, volume).await?;
+        let response = self.client.market_open(symbol, side, volume).await?;
 
         // Update tracking
         self.update_order(&client_order_id, &response);
@@ -138,12 +140,11 @@ impl LbankOrderManager {
         Ok(client_order_id)
     }
 
-    /// Submit a limit order
+    /// Submit a limit order (限价开仓)
     pub async fn submit_limit_order(
         &self,
         symbol: &str,
         side: TradeDirection,
-        offset: OffsetFlag,
         volume: Decimal,
         price: Decimal,
     ) -> Result<String> {
@@ -157,7 +158,7 @@ impl LbankOrderManager {
                 exchange_order_id: None,
                 symbol: symbol.to_string(),
                 side,
-                offset,
+                offset: OffsetFlag::Open,
                 volume,
                 filled_volume: Decimal::ZERO,
                 avg_price: None,
@@ -168,7 +169,7 @@ impl LbankOrderManager {
         }
 
         // Place the order
-        let response = self.client.place_limit_order(symbol, side, offset, volume, price).await?;
+        let response = self.client.limit_open(symbol, side, volume, price).await?;
 
         // Update tracking
         self.update_order(&client_order_id, &response);
@@ -281,8 +282,8 @@ impl LbankOrderManager {
 
         if let Some(exchange_id) = exchange_id {
             info!(exchange_id = %exchange_id, "Cancelling order");
-            // TODO: Call cancel API
-            // self.client.cancel_order(&exchange_id).await?;
+            // 调用撤单 API - 文档4.4
+            self.client.cancel_order(&exchange_id).await?;
 
             // Update state
             let mut orders = self.orders.write();
@@ -310,8 +311,10 @@ mod tests {
     #[test]
     fn test_order_state_conversion() {
         assert_eq!(OrderState::from("0"), OrderState::Pending);
-        assert_eq!(OrderState::from("1"), OrderState::Submitted);
-        assert_eq!(OrderState::from("3"), OrderState::Filled);
-        assert_eq!(OrderState::from("5"), OrderState::Rejected);
+        assert_eq!(OrderState::from("1"), OrderState::Filled);  // 全部成交
+        assert_eq!(OrderState::from("2"), OrderState::PartiallyFilled);  // 部分成交
+        assert_eq!(OrderState::from("3"), OrderState::Cancelled);  // 部分成交已撤销
+        assert_eq!(OrderState::from("5"), OrderState::Rejected);  // 失败
+        assert_eq!(OrderState::from("6"), OrderState::Cancelled);  // 已撤销
     }
 }

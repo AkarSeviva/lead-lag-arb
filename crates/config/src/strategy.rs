@@ -1,4 +1,6 @@
 //! Strategy configuration types
+//!
+//! Lbank 永续合约套利策略配置
 
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -6,6 +8,14 @@ use serde::{Deserialize, Serialize};
 /// Main strategy configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StrategyConfig {
+    /// 币种列表 (用于交集计算和轮转池)
+    /// 如果为空，则使用所有交集币种
+    pub symbols: Vec<String>,
+
+    /// 当前交易的币种 (动态更新)
+    /// 由 SymbolSelector 根据价差机会动态确定
+    pub active_symbol: Option<String>,
+
     /// Entry threshold (e.g., 0.001 = 0.1%)
     pub entry_threshold: Decimal,
 
@@ -32,6 +42,53 @@ pub struct StrategyConfig {
 
     /// Network configuration (proxy, timeouts, etc.)
     pub network: NetworkConfig,
+
+    /// Fee configuration
+    pub fee: FeeConfig,
+}
+
+/// Fee configuration - Lbank 手续费配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FeeConfig {
+    /// Maker fee rate (0.0006 = 0.06%)
+    pub maker_fee_rate: Decimal,
+    /// Taker fee rate (0.0006 = 0.06%)
+    pub taker_fee_rate: Decimal,
+    /// Rebate rate (0.7 = 70% 返佣)
+    pub rebate_rate: Decimal,
+    /// 是否使用市价单 (true = 纯taker)
+    pub use_market_orders: bool,
+}
+
+impl Default for FeeConfig {
+    fn default() -> Self {
+        Self {
+            // Lbank 市价手续费率 0.06%
+            maker_fee_rate: Decimal::new(6, 5),  // 0.0006
+            taker_fee_rate: Decimal::new(6, 5),   // 0.0006
+            // 70% 返佣 (实际手续费 = taker_fee * (1 - rebate_rate))
+            rebate_rate: Decimal::new(7, 1),       // 0.7
+            use_market_orders: true,              // 默认使用市价单
+        }
+    }
+}
+
+/// Effective fee after rebate
+impl FeeConfig {
+    /// 计算开仓实际手续费率 (taker - rebate)
+    pub fn open_fee_rate(&self) -> Decimal {
+        self.taker_fee_rate * (Decimal::ONE - self.rebate_rate)
+    }
+
+    /// 计算平仓实际手续费率 (taker - rebate)
+    pub fn close_fee_rate(&self) -> Decimal {
+        self.taker_fee_rate * (Decimal::ONE - self.rebate_rate)
+    }
+
+    /// 计算总手续费率 (开仓 + 平仓)
+    pub fn total_fee_rate(&self) -> Decimal {
+        self.open_fee_rate() + self.close_fee_rate()
+    }
 }
 
 /// Filter configuration
@@ -80,15 +137,29 @@ pub struct RiskConfig {
 pub struct CapitalConfig {
     /// Initial capital in USDT
     pub initial_capital: Decimal,
-
     /// Position size as fraction of capital (0.0 - 1.0)
     pub position_fraction: Decimal,
-
-    /// Enable leverage
+    /// Margin mode: true = 全仓 (cross margin), false = 逐仓 (isolated margin)
+    pub cross_margin: bool,
+    /// Nominal leverage (e.g., 125 = 最大可用名义杠杆)
     pub leverage: u32,
+    /// Max position size in quote currency (USDT)
+    pub max_position_usdt: Decimal,
+    /// Order quantity mode: true = 不超过 bid1/ask1 (市价不跳价)
+    pub clamp_to_best_price: bool,
+}
 
-    /// Max notional per trade
-    pub max_notional: Decimal,
+impl Default for CapitalConfig {
+    fn default() -> Self {
+        Self {
+            initial_capital: Decimal::new(10_000, 0),
+            position_fraction: Decimal::ONE,
+            cross_margin: true,
+            leverage: 125,
+            max_position_usdt: Decimal::new(100_000, 0),
+            clamp_to_best_price: true,
+        }
+    }
 }
 
 /// Network configuration
@@ -126,7 +197,12 @@ impl Default for NetworkConfig {
 impl Default for StrategyConfig {
     fn default() -> Self {
         Self {
-            // Target 0.1% spread capture
+            symbols: vec![
+                "BTCUSDT".to_string(),
+                "ETHUSDT".to_string(),
+                "SOLUSDT".to_string(),
+            ],
+            active_symbol: None,
             entry_threshold: Decimal::new(10, 4), // 0.001
             tp_ratio: Decimal::new(1, 0),          // 1.0 = full convergence
             sl_ratio: Decimal::new(1, 0),          // 1.0 = double spread
@@ -136,6 +212,7 @@ impl Default for StrategyConfig {
             risk: RiskConfig::default(),
             capital: CapitalConfig::default(),
             network: NetworkConfig::default(),
+            fee: FeeConfig::default(),
         }
     }
 }
@@ -161,17 +238,6 @@ impl Default for RiskConfig {
             circuit_breaker_losses: 5,
             circuit_breaker_pause_secs: 300,
             cooldown_after_sl_secs: 5,
-        }
-    }
-}
-
-impl Default for CapitalConfig {
-    fn default() -> Self {
-        Self {
-            initial_capital: Decimal::new(10_000, 0),    // $10,000
-            position_fraction: Decimal::new(1, 1),       // 10%
-            leverage: 1,
-            max_notional: Decimal::new(10_000, 0),       // $10,000
         }
     }
 }

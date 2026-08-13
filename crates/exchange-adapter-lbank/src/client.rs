@@ -10,7 +10,6 @@ use reqwest::Client;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use std::time::Duration;
 use tracing::{debug, error, instrument};
 
 /// REST API base URL
@@ -78,14 +77,13 @@ impl LbankClient {
 
     /// Make an authenticated POST request
     #[instrument(skip(self, body), fields(path = %path))]
-    #[allow(dead_code)]
     pub async fn post<B, R>(&self, path: &str, body: &B) -> Result<R>
     where
         B: serde::Serialize,
         R: serde::de::DeserializeOwned,
     {
         let body_str = serde_json::to_string(body)?;
-        let headers = self.signer.get_headers(&body_str, path);
+        let headers = self.signer.get_headers("POST", path);
         let url = format!("{}{}", self.base_url, path);
 
         debug!(url = %url, "POST request");
@@ -122,7 +120,7 @@ impl LbankClient {
     where
         R: serde::de::DeserializeOwned,
     {
-        let headers = self.signer.get_headers("", path);
+        let headers = self.signer.get_headers("GET", path);
         let mut url = format!("{}{}", self.base_url, path);
 
         if let Some(query) = query {
@@ -300,68 +298,190 @@ impl LbankClient {
     // Trading APIs
     // ========================================================================
 
-    /// Place a market order
-    pub async fn place_market_order(
+    /// 市价开仓 - 文档3.4
+    pub async fn market_open(
         &self,
         symbol: &str,
         direction: TradeDirection,
-        offset: OffsetFlag,
         volume: Decimal,
     ) -> Result<OrderInsertResponse> {
-        let req = OrderInsertRequest::new_market_order(
+        let req = OrderInsertRequest::new_market_open(
             symbol,
             direction,
-            offset,
             volume.to_string().parse().unwrap_or(0.0),
         );
-
         self.post("/cfd/cff/v1/SendOrderInsert", &req).await
     }
 
-    /// Place a limit order
-    pub async fn place_limit_order(
+    /// 市价平仓 - 文档3.5
+    pub async fn market_close(
         &self,
         symbol: &str,
         direction: TradeDirection,
-        offset: OffsetFlag,
+        volume: Decimal,
+        trade_unit_id: &str,
+    ) -> Result<OrderInsertResponse> {
+        let req = OrderInsertRequest::new_market_close(
+            symbol,
+            direction,
+            volume.to_string().parse().unwrap_or(0.0),
+            trade_unit_id,
+        );
+        self.post("/cfd/cff/v1/SendOrderInsert", &req).await
+    }
+
+    /// 限价开仓 - 文档4.1
+    pub async fn limit_open(
+        &self,
+        symbol: &str,
+        direction: TradeDirection,
         volume: Decimal,
         price: Decimal,
     ) -> Result<OrderInsertResponse> {
-        let req = OrderInsertRequest::new_limit_order(
+        let req = OrderInsertRequest::new_limit_open(
             symbol,
             direction,
-            offset,
             volume.to_string().parse().unwrap_or(0.0),
             price.to_string().parse().unwrap_or(0.0),
         );
-
         self.post("/cfd/cff/v1/SendOrderInsert", &req).await
     }
 
-    /// Query positions
-    pub async fn query_positions(&self) -> Result<Vec<PositionResponse>> {
+    /// 限价平仓
+    pub async fn limit_close(
+        &self,
+        symbol: &str,
+        direction: TradeDirection,
+        volume: Decimal,
+        price: Decimal,
+        trade_unit_id: &str,
+    ) -> Result<OrderInsertResponse> {
+        let req = OrderInsertRequest::new_limit_close(
+            symbol,
+            direction,
+            volume.to_string().parse().unwrap_or(0.0),
+            price.to_string().parse().unwrap_or(0.0),
+            trade_unit_id,
+        );
+        self.post("/cfd/cff/v1/SendOrderInsert", &req).await
+    }
+
+    /// 设置杠杆 - 文档3.3
+    pub async fn set_leverage(
+        &self,
+        symbol: &str,
+        leverage: i32,
+    ) -> Result<()> {
         #[derive(Deserialize)]
-        struct Response {
-            #[serde(rename = "instrumentId")]
-            instrument_id: String,
-            #[serde(rename = "exchangeId")]
-            exchange_id: String,
-            direction: Option<String>,
-            #[serde(rename = "positionVolume")]
-            position_volume: Option<String>,
-            #[serde(rename = "positionCost")]
-            position_cost: Option<String>,
-            #[serde(rename = "positionProfit")]
-            position_profit: Option<String>,
-            #[serde(rename = "useVolume")]
-            use_volume: Option<String>,
-            #[serde(rename = "frozenVolume")]
-            frozen_volume: Option<String>,
-            #[serde(rename = "canCloseVolume")]
-            can_close_volume: Option<String>,
+        struct Response { code: i32 }
+
+        let req = SetLeverageRequest {
+            instrument_id: symbol.to_string(),
+            long_leverage: leverage,
+            short_leverage: leverage,
+        };
+
+        let resp: Response = self.post("/cfd/position/v1/setMultiLeverage", &req).await?;
+        if resp.code == 200 {
+            Ok(())
+        } else {
+            anyhow::bail!("Set leverage failed: code={}", resp.code)
+        }
+    }
+
+    /// 获取币种的最大可用杠杆 - 文档3.2
+    /// 返回 (long_max_leverage, short_max_leverage)
+    pub async fn get_max_leverage(&self, symbol: &str) -> Result<(i32, i32)> {
+        #[derive(Serialize)]
+        struct Request<'a> {
+            product_group: &'a str,
+            #[serde(rename = "instrumentID")]
+            instrument_id: &'a str,
+            asset: &'a str,
         }
 
-        let resp: Vec<Response> = self.get(
+        // 调用 sendQryAll API
+        let resp: LbankResponse<AggregateInfoResponse> = self.post("/cfd/agg/v1/sendQryAll", &Request {
+            product_group: "SwapU",
+            instrument_id: symbol,
+            asset: "USDT",
+        }).await?;
+
+        // 从响应中提取最大杠杆
+        if let Some(data) = resp.data {
+            let long_max = data.long_max_leverage.unwrap_or(125);
+            let short_max = data.short_max_leverage.unwrap_or(125);
+            Ok((long_max, short_max))
+        } else {
+            // 默认值
+            Ok((125, 125))
+        }
+    }
+
+    /// 初始化杠杆设置 - 获取最大杠杆并设置
+    /// 返回实际设置的杠杆值
+    pub async fn init_leverage(&self, symbol: &str, requested_leverage: i32) -> Result<i32> {
+        // 先获取该币种的最大可用杠杆
+        let (long_max, short_max) = self.get_max_leverage(symbol).await?;
+        let max_allowed = long_max.min(short_max);
+
+        // 取较小值作为实际设置的杠杆
+        let actual_leverage = requested_leverage.min(max_allowed);
+
+        tracing::info!(
+            "Initializing leverage for {}: requested={}, max_allowed={}, actual={}",
+            symbol, requested_leverage, max_allowed, actual_leverage
+        );
+
+        // 设置杠杆
+        self.set_leverage(symbol, actual_leverage).await?;
+
+        Ok(actual_leverage)
+    }
+
+    /// 止盈止损下单 - 文档4.1
+    pub async fn place_stop_order(
+        &self,
+        symbol: &str,
+        direction: TradeDirection,
+        volume: Decimal,
+        price: Decimal,
+        sl_trigger_price: &str,
+        tp_trigger_price: &str,
+        trigger_order_type: TriggerOrderType,
+    ) -> Result<OrderInsertResponse> {
+        let req = CloseOrderInsertRequest::new(
+            symbol,
+            direction,
+            volume.to_string().parse().unwrap_or(0.0),
+            price.to_string().parse().unwrap_or(0.0),
+            sl_trigger_price,
+            tp_trigger_price,
+            trigger_order_type,
+        );
+
+        self.post("/cfd/action/v1.0/SendCloseOrderInsert", &req).await
+    }
+
+    /// 撤单 - 文档4.4
+    pub async fn cancel_order(&self, order_sys_id: &str) -> Result<CancelOrderResponse> {
+        #[derive(Serialize)]
+        struct Request {
+            #[serde(rename = "OrderSysID")]
+            order_sys_id: String,
+            #[serde(rename = "ActionFlag")]
+            action_flag: String,
+        }
+
+        self.post("/cfd/action/v1.0/SendOrderAction", &Request {
+            order_sys_id: order_sys_id.to_string(),
+            action_flag: "1".to_string(),
+        }).await
+    }
+
+    /// 查询当前持仓 - 文档5.1
+    pub async fn query_positions(&self) -> Result<Vec<PositionResponse>> {
+        self.get(
             "/cfd/query/v1.0/Position",
             Some(&[
                 ("ProductGroup", "SwapU"),
@@ -369,22 +489,80 @@ impl LbankClient {
                 ("pageIndex", "1"),
                 ("pageSize", "1000"),
             ]),
-        ).await?;
-
-        Ok(resp.into_iter().map(|r| PositionResponse {
-            instrument_id: r.instrument_id,
-            exchange_id: r.exchange_id,
-            direction: r.direction,
-            position_volume: r.position_volume,
-            position_cost: r.position_cost,
-            position_profit: r.position_profit,
-            use_volume: r.use_volume,
-            frozen_volume: r.frozen_volume,
-            can_close_volume: r.can_close_volume,
-        }).collect())
+        ).await
     }
 
-    /// Query orders
+    /// 查询触发单 - 文档4.3
+    pub async fn query_trigger_orders(&self) -> Result<Vec<TriggerOrderResponse>> {
+        self.get(
+            "/cfd/query/v1.0/TriggerOrder",
+            Some(&[
+                ("ProductGroup", "SwapU"),
+                ("ExchangeID", "Exchange"),
+                ("pageIndex", "1"),
+                ("pageSize", "1000"),
+                ("TriggerOrderType", "12"),  // 查询所有
+            ]),
+        ).await
+    }
+
+    /// 查询历史委托 - 文档5.3
+    pub async fn query_history_orders(
+        &self,
+        start_time: i64,
+        end_time: i64,
+    ) -> Result<Vec<HistoryOrderResponse>> {
+        self.get(
+            "/cfd/order/v1/historyAllOrderPage",
+            Some(&[
+                ("pageNo", "1"),
+                ("pageSize", "100"),
+                ("fakeOnePage", "1"),
+                ("startTime", &start_time.to_string()),
+                ("endTime", &end_time.to_string()),
+                ("orderBusType", "4"),
+            ]),
+        ).await
+    }
+
+    /// 查询历史成交 - 文档5.2
+    pub async fn query_history_trades(
+        &self,
+        start_time: i64,
+        end_time: i64,
+    ) -> Result<Vec<TradeResponse>> {
+        self.get(
+            "/cfd/query/v1.0/Trade",
+            Some(&[
+                ("ProductGroup", "SwapU"),
+                ("orderType", "price"),
+                ("pageNo", "1"),
+                ("pageSize", "100"),
+                ("fakeOnePage", "1"),
+                ("startTime", &start_time.to_string()),
+                ("endTime", &end_time.to_string()),
+            ]),
+        ).await
+    }
+
+    /// 查询聚合信息(余额) - 文档3.2
+    pub async fn query_aggregate_info(&self, symbol: &str) -> Result<AggregateInfoResponse> {
+        #[derive(Serialize)]
+        struct Request<'a> {
+            product_group: &'a str,
+            #[serde(rename = "instrumentID")]
+            instrument_id: &'a str,
+            asset: &'a str,
+        }
+
+        self.post("/cfd/agg/v1/sendQryAll", &Request {
+            product_group: "SwapU",
+            instrument_id: symbol,
+            asset: "USDT",
+        }).await
+    }
+
+    /// 查询当前订单
     pub async fn query_orders(&self, symbol: Option<&str>) -> Result<Vec<OrderResponse>> {
         let mut params = vec![
             ("ProductGroup", "SwapU"),

@@ -17,14 +17,17 @@ anyhow = { workspace = true }
 rust_decimal = { workspace = true }
 clap = { version = "4.5", features = ["derive"] }
 toml = { workspace = true }
+chrono = { workspace = true }
 
 # Internal crates
 config = { path = "../../crates/config" }
 exchange-adapter-lbank = { path = "../../crates/exchange-adapter-lbank" }
+exchange-adapter-binance = { path = "../../crates/exchange-adapter-binance" }
 md-gateway = { path = "../../crates/md-gateway" }
 clock-sync = { path = "../../crates/clock-sync" }
 orderbook = { path = "../../crates/orderbook" }
 signal-engine = { path = "../../crates/signal-engine" }
+symbol-selector = { path = "../../crates/symbol-selector" }
 risk-gate = { path = "../../crates/risk-gate" }
 execution = { path = "../../crates/execution" }
 fee-pnl = { path = "../../crates/fee-pnl" }

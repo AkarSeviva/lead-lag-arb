@@ -1,7 +1,8 @@
 //! Arbitrage Signal Types
+//!
+//! 包含手续费计算的套利信号
 
 use rust_decimal::Decimal;
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// Signal direction
@@ -114,6 +115,25 @@ impl SpreadSnapshot {
             && self.follower_ask > Decimal::ZERO
             && self.leader_bid < self.leader_ask  // bid < ask
             && self.follower_bid < self.follower_ask  // bid < ask
+    }
+
+    /// 计算手续费后的净盈利 (扣除手续费后)
+    /// 手续费 = 开仓费率 + 平仓费率 = 0.06% * (1-70%) * 2 = 0.036%
+    pub fn net_spread_after_fees(&self, direction: SignalDirection, total_fee_rate: Decimal) -> Decimal {
+        let gross_spread = self.entry_spread(direction);
+        // 净盈利 = 价差 - 手续费
+        let mid_price = match direction {
+            SignalDirection::Long => (self.leader_bid + self.follower_ask) / Decimal::from(2),
+            SignalDirection::Short => (self.follower_bid + self.leader_ask) / Decimal::from(2),
+            SignalDirection::None => return Decimal::ZERO,
+        };
+        let fee_per_unit = mid_price * total_fee_rate;
+        gross_spread - fee_per_unit
+    }
+
+    /// 检查信号是否值得交易 (扣除手续费后仍盈利)
+    pub fn is_profitable_after_fees(&self, direction: SignalDirection, total_fee_rate: Decimal) -> bool {
+        self.net_spread_after_fees(direction, total_fee_rate) > Decimal::ZERO
     }
 }
 
