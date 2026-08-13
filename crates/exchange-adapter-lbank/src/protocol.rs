@@ -371,36 +371,42 @@ pub struct PositionQueryRequest {
 /// Position Query Response - 文档5.1确认
 #[derive(Debug, Deserialize)]
 pub struct PositionResponse {
-    #[serde(rename = "positionID")]
+    #[serde(rename = "PositionID")]
     pub position_id: String,          // 持仓ID
     #[serde(rename = "TradeUnitID")]
     pub trade_unit_id: String,       // 交易单元ID (平仓必需)
-    #[serde(rename = "instrumentId")]
+    #[serde(rename = "InstrumentID")]
     pub instrument_id: String,
-    #[serde(rename = "exchangeId")]
+    #[serde(rename = "ExchangeID")]
     pub exchange_id: String,
-    #[serde(rename = "posiDirection")]
+    #[serde(rename = "PosiDirection")]
     pub posi_direction: String,     // "0"=多, "1"=空
+    #[serde(rename = "Position")]
     pub position: String,            // 持仓数量
-    #[serde(rename = "openPrice")]
+    #[serde(rename = "OpenPrice")]
     pub open_price: String,          // 开仓均价
-    #[serde(rename = "positionCost")]
+    #[serde(rename = "PositionCost")]
     pub position_cost: String,      // 持仓成本
-    #[serde(rename = "useMargin")]
+    #[serde(rename = "UseMargin")]
     pub use_margin: String,         // 已用保证金
-    #[serde(rename = "leverage")]
-    pub leverage: Option<i32>,      // 杠杆
+    #[serde(rename = "Leverage")]
+    pub leverage: Option<String>,      // 杠杆
     #[serde(rename = "estimateLiquidationPrice")]
     pub estimate_liquidation_price: Option<String>,  // 预估强平价
-    pub direction: Option<String>,
-    #[serde(rename = "positionVolume")]
-    pub position_volume: Option<String>,
-    pub position_profit: Option<String>,
-    #[serde(rename = "useVolume")]
-    pub use_volume: Option<String>,
-    pub frozen_volume: Option<String>,
-    #[serde(rename = "canCloseVolume")]
-    pub can_close_volume: Option<String>,
+    #[serde(rename = "CloseProfit")]
+    pub close_profit: Option<String>,
+    #[serde(rename = "Currency")]
+    pub currency: Option<String>,
+    #[serde(rename = "IsCrossMargin")]
+    pub is_cross_margin: Option<String>,
+    #[serde(rename = "AvailableUse")]
+    pub available_use: Option<String>,
+    #[serde(rename = "FrozenMargin")]
+    pub frozen_margin: Option<String>,
+    #[serde(rename = "PositionFee")]
+    pub position_fee: Option<String>,
+    #[serde(rename = "TradeFee")]
+    pub trade_fee: Option<String>,
 }
 
 /// Order Query Response - 文档5.3
