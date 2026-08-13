@@ -16,6 +16,10 @@ path = "test_auth_debug.rs"
 name = "print_headers"
 path = "print_headers.rs"
 
+[[bin]]
+name = "test_order_operations"
+path = "test_order_operations.rs"
+
 [dependencies]
 exchange-adapter-lbank = { path = "../crates/exchange-adapter-lbank" }
 tokio.workspace = true
