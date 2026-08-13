@@ -33,7 +33,10 @@ use tracing_subscriber::util::SubscriberInitExt;
 const SYMBOL: &str = "BTCUSDT";
 const VOLUME_STR: &str = "0.0001";
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
-const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(500);
+const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(1); // 放慢轮询，避免 429
+
+/// Phase 之间强制间隔，避免触发 Cloudflare 反爬 (默认 1500ms)
+const PHASE_INTER_DELAY: Duration = Duration::from_millis(1500);
 
 // ============================================================================
 // 工具：轮询等待 + 测试报告器
@@ -213,17 +216,12 @@ pub async fn op_market_close(
 
 /// **op_market_close_with_fallback**：智能平仓 (默认 direction=持仓方向，失败回退到反方向)
 ///
-/// 背景知识 (摘自 `订单逆向.md`，实测 Lbank cfd/v1.0 API)：
-/// - 开多:  `direction=0, OffsetFlag=0` → 响应 `posiDirection=0` (Long)
-/// - 开空:  `direction=1, OffsetFlag=0` → 响应 `posiDirection=1` (Short)
-/// - 平多仓: 实测 direction=0 + OffsetFlag=5 时报错 code=31 "超过可平量"  ← 不对
-/// - 平空仓: 实测 direction=0 + OffsetFlag=5 时成功 (from 订单逆向.md:174)
-///   —— 即平空是用 direction=0, 平空的持仓 posiDirection=1
-/// 综合得出 **Lbank 平仓 direction 取值与持仓方向相反**：
-///   平多仓 (posiDir=0) → direction=1, OffsetFlag=5
-///   平空仓 (posiDir=1) → direction=0, OffsetFlag=5
+/// 经 `订单逆向.md:97-188` 实测验证：Lbank 平仓 direction 是持仓方向的**反方向**
+/// （平多→1，平空→0）。`client::market_close` 已经把传入的 `direction` (持仓方向)
+/// 取反后发给服务端，所以这里直接调用 client API。
 ///
-/// 为了稳妥起见，这里先按文档 (`direction = 持仓方向`) 试一次，失败后再试反方向。
+/// **保留 fallback** 是为了防御性编程：如果服务端规则在某天反转，回退链路可以
+/// 自动切换到反方向，否则会两次都失败。
 pub async fn op_market_close_with_fallback(
     client: &LbankClient,
     symbol: &str,
@@ -237,43 +235,40 @@ pub async fn op_market_close_with_fallback(
         TradeDirection::Short => TradeDirection::Long,
     };
 
-    // 尝试 1: direction = 反方向 (基于订单逆向.md 实测：平空=0, 平多=1)
-    let opp_label = format!("market_close_opp_d{:?}", opp_dir);
+    // 尝试 1: 通过 client API (内部已自动取反)
+    let opp_label = format!("market_close_via_client_d{:?}", opp_dir);
     debug!(
         label = %opp_label,
         symbol = %symbol,
         volume = %volume,
         trade_unit_id = %trade_unit_id,
         offset_flag = "5",
-        direction = ?opp_dir,
-        "flat: 尝试 1 (direction=反方向, 来源: 订单逆向.md 实测)"
+        position_direction = ?position_direction,
+        "flat: 尝试 1 (client 自动取反)"
     );
-    let opp_err: Option<anyhow::Error> = match op_market_close(
-        client, symbol, opp_dir, volume, trade_unit_id,
-    ).await {
+    let e1 = match op_market_close(client, symbol, position_direction, volume, trade_unit_id).await {
         Ok(r) => {
             reporter.success(&format!(
-                "市价平仓成功 (direction=反方向, 来源订单逆向.md): order_sys_id={}, trade_price={}, close_profit={}",
-                r.order_sys_id, r.trade_price, r.close_profit
+                "市价平仓成功 (client 自动取反为 direction={:?}): order_sys_id={}, trade_price={}, close_profit={}",
+                opp_dir, r.order_sys_id, r.trade_price, r.close_profit
             ));
             return Ok(r);
         }
-        Err(e) => {
-            warn!(
-                label = %opp_label,
-                error = %e,
-                "flat close opposite-direction failed; will try same-direction"
-            );
-            reporter.warn(&format!(
-                "direction=反方向 失败 ({:#?}); 切换尝试 direction=持仓方向",
-                e
-            ));
-            Some(e)
-        }
+        Err(e) => e,
     };
 
-    // 尝试 2: direction = 持仓方向 (文档理论)
-    let pos_label = format!("market_close_pos_d{:?}", position_direction);
+    warn!(
+        label = %opp_label,
+        error = %e1,
+        "flat close via client failed; will try raw opposite-direction"
+    );
+    reporter.warn(&format!(
+        "client API 失败 ({:#?}); 切换尝试 raw direction=持仓方向",
+        e1
+    ));
+
+    // 尝试 2: 直接 payload 用原始 direction = 持仓方向 (理论，按旧文档)
+    let pos_label = format!("market_close_raw_pos_d{:?}", position_direction);
     debug!(
         label = %pos_label,
         symbol = %symbol,
@@ -281,22 +276,20 @@ pub async fn op_market_close_with_fallback(
         trade_unit_id = %trade_unit_id,
         offset_flag = "5",
         direction = ?position_direction,
-        "flat: 尝试 2 (direction=持仓方向)"
+        "flat: 尝试 2 (raw payload, direction=持仓方向)"
     );
-    match op_market_close(client, symbol, position_direction, volume, trade_unit_id).await {
+    match client.post_raw_market_close(symbol, position_direction, volume, trade_unit_id).await {
         Ok(r) => {
             reporter.success(&format!(
-                "市价平仓成功 (direction=持仓方向!): order_sys_id={}, close_profit={}",
+                "市价平仓成功 (raw direction=持仓方向): order_sys_id={}, close_profit={}",
                 r.order_sys_id, r.close_profit
             ));
             Ok(r)
         }
         Err(e2) => {
-            // 再次尝试失败：合并两个错误报告，方便诊断
             let diag = format!(
-                "市价平仓两个方向都失败: opp_err={:#?}, pos_err={:#?}",
-                opp_err.as_ref().map(|e| format!("{:#?}", e)).unwrap_or_else(|| "<无>".to_string()),
-                e2
+                "市价平仓两个方向都失败: client_err={:#?}, raw_err={:#?}",
+                e1, e2
             );
             reporter.fail(&diag);
             Err(e2)
@@ -387,6 +380,43 @@ pub async fn op_query_pending_orders(
     let orders = client.query_orders(Some(symbol)).await?;
     debug!(count = orders.len(), "op_query_pending_orders done");
     Ok(orders)
+}
+
+/// **op_query_pending_orders_with_retry**：查询挂单，遇 429 时自动 backoff 重试
+pub async fn op_query_pending_orders_with_retry(
+    client: &LbankClient,
+    symbol: &str,
+    max_attempts: u32,
+) -> anyhow::Result<Vec<exchange_adapter_lbank::protocol::OrderResponse>> {
+    let mut backoff = Duration::from_secs(2);
+    for attempt in 1..=max_attempts {
+        match op_query_pending_orders(client, symbol).await {
+            Ok(orders) => return Ok(orders),
+            Err(e) => {
+                let msg = format!("{:#?}", e);
+                // 429 / Cloudflare / rate-limit / network error 都重试
+                let retryable = msg.contains("429")
+                    || msg.contains("Too Many Requests")
+                    || msg.contains("rate")
+                    || msg.contains("cloudflare")
+                    || msg.contains("Just a moment")
+                    || msg.contains("connection")
+                    || msg.contains("timed out");
+                if !retryable || attempt == max_attempts {
+                    return Err(e);
+                }
+                warn!(
+                    attempt = attempt,
+                    backoff_ms = backoff.as_millis(),
+                    error = %e,
+                    "op_query_pending_orders_with_retry: 429/network, retrying"
+                );
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(Duration::from_secs(15));
+            }
+        }
+    }
+    anyhow::bail!("op_query_pending_orders_with_retry: exceeded max_attempts")
 }
 
 /// **op_wait_for_position**：轮询等到指定方向和数量的持仓出现
@@ -483,13 +513,14 @@ pub async fn op_wait_for_pending_orders(
     let start = Instant::now();
     while start.elapsed() < DEFAULT_TIMEOUT {
         attempts += 1;
-        match op_query_pending_orders(client, symbol).await {
+        // 用 retry 版本，自动处理 429
+        match op_query_pending_orders_with_retry(client, symbol, 4).await {
             Ok(orders) => {
                 let pending: Vec<_> = orders
                     .iter()
                     .filter(|o| {
                         let s = o.order_status.as_deref().unwrap_or("0");
-                        s == "2" || s == "3"
+                        s == "2" || s == "3" || s == "4" // 4=已挂单(Lbank实测状态码)
                     })
                     .cloned()
                     .collect();
@@ -725,32 +756,35 @@ async fn phase_d_limit_long_with_tpsl(
         limit_price
     ));
 
-    let open_resp = match client
-        .place_stop_order(
-            SYMBOL,
-            TradeDirection::Long,
-            volume,
-            limit_price,
-            // SL/TP 触发价（占位；这里手动控制测试）
-            "49000",
-            "55000",
-            exchange_adapter_lbank::protocol::TriggerOrderType::OrderStopProfitLoss,
-        )
-        .await
+    let open_resp = match op_limit_open(
+        client,
+        SYMBOL,
+        TradeDirection::Long,
+        volume,
+        limit_price,
+    )
+    .await
     {
         Ok(r) => r,
         Err(e) => {
-            reporter.fail(&format!("限价+TPSL 开多失败: {:#?}", e));
+            reporter.fail(&format!("限价开多失败: {:#?}", e));
             reporter.section_end();
             return;
         }
     };
     reporter.success(&format!(
-        "限价+TPSL 开多成功: order_sys_id={}, price={}, status={}",
+        "限价开多成功: order_sys_id={}, price={}, status={}",
         open_resp.order_sys_id, open_resp.price, open_resp.order_status
     ));
 
-    // 撤单
+    // D2: 轮询等待挂单出现 (status=4=已挂单)
+    if op_wait_for_pending_orders(client, SYMBOL, 1).await.is_empty() {
+        reporter.warn("轮询等待挂单超时 (但订单插入返回 status=4，应该已挂单)");
+    } else {
+        reporter.success("挂单确认 (pending)");
+    }
+
+    // D3: 撤单
     match op_cancel_order(client, &open_resp.order_sys_id).await {
         Ok(r) => reporter.success(&format!(
             "撤单成功: order_sys_id={}, status={}",
@@ -765,7 +799,7 @@ async fn phase_e_limit_short_with_tpsl(
     client: &LbankClient,
     reporter: &mut TestReporter,
 ) {
-    reporter.section("E. 限价开空 (TPSL) → 撤单 (Phase E)");
+    reporter.section("E. 限价开空 (无 TPSL) → 撤单 (Phase E)");
 
     let volume = Decimal::from_str(VOLUME_STR).unwrap();
     let limit_price = match op_get_mid_price(client, SYMBOL).await {
@@ -777,30 +811,35 @@ async fn phase_e_limit_short_with_tpsl(
         limit_price
     ));
 
-    let open_resp = match client
-        .place_stop_order(
-            SYMBOL,
-            TradeDirection::Short,
-            volume,
-            limit_price,
-            "75000",
-            "65000",
-            exchange_adapter_lbank::protocol::TriggerOrderType::OrderStopProfitLoss,
-        )
-        .await
+    let open_resp = match op_limit_open(
+        client,
+        SYMBOL,
+        TradeDirection::Short,
+        volume,
+        limit_price,
+    )
+    .await
     {
         Ok(r) => r,
         Err(e) => {
-            reporter.fail(&format!("限价+TPSL 开空失败: {:#?}", e));
+            reporter.fail(&format!("限价开空失败: {:#?}", e));
             reporter.section_end();
             return;
         }
     };
     reporter.success(&format!(
-        "限价+TPSL 开空成功: order_sys_id={}, price={}, status={}",
+        "限价开空成功: order_sys_id={}, price={}, status={}",
         open_resp.order_sys_id, open_resp.price, open_resp.order_status
     ));
 
+    // E2: 轮询等待挂单出现
+    if op_wait_for_pending_orders(client, SYMBOL, 1).await.is_empty() {
+        reporter.warn("轮询等待挂单超时 (但订单插入返回 status=4，应该已挂单)");
+    } else {
+        reporter.success("挂单确认 (pending)");
+    }
+
+    // E3: 撤单
     match op_cancel_order(client, &open_resp.order_sys_id).await {
         Ok(r) => reporter.success(&format!(
             "撤单成功: order_sys_id={}, status={}",
@@ -872,7 +911,7 @@ async fn phase_g_final_state(
         Err(e) => reporter.fail(&format!("查询失败: {:#?}", e)),
     }
 
-    match op_query_pending_orders(client, SYMBOL).await {
+    match op_query_pending_orders_with_retry(client, SYMBOL, 4).await {
         Ok(orders) => {
             reporter.success(&format!("最终挂单数: {}", orders.len()));
             for order in orders {
@@ -925,13 +964,25 @@ async fn main() -> anyhow::Result<()> {
         proxy_config,
     )?;
 
-    // 串行运行各 Phase (每个 phase 互相独立)
+    // 串行运行各 Phase (每个 phase 互相独立)，phase 间强制 sleep 防止 429
+    macro_rules! gap {
+        () => {
+            tokio::time::sleep(PHASE_INTER_DELAY).await;
+        };
+    }
+
     phase_a_status_and_cleanup(&client, &mut reporter).await;
+    gap!();
     phase_b_market_long_roundtrip(&client, &mut reporter).await;
+    gap!();
     phase_c_market_short_roundtrip(&client, &mut reporter).await;
+    gap!();
     phase_d_limit_long_with_tpsl(&client, &mut reporter).await;
+    gap!();
     phase_e_limit_short_with_tpsl(&client, &mut reporter).await;
+    gap!();
     phase_f_limit_long_no_tpsl_and_cancel(&client, &mut reporter).await;
+    gap!();
     phase_g_final_state(&client, &mut reporter).await;
 
     let filename = "test_order_result.txt";

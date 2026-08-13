@@ -375,10 +375,14 @@ impl LbankClient {
 
     /// 市价平仓 - 文档3.5
     ///
-    /// 重要：Lbank 平仓 direction 和持仓方向 **相同**（不是反向）。
-    /// - 平多仓 (posiDirection=0) → Direction="0"
-    /// - 平空仓 (posiDirection=1) → Direction="1"
-    /// 注意：本方法的语义和开仓一致；调用方传 `TradeDirection::Long` 表示平**多**仓。
+    /// ⚠️ **实测修正**（来自 `订单逆向.md:97-188` 与 test_order_result.txt）：
+    /// Lbank 平仓 direction 与持仓方向 **相反**（不是相同！）
+    /// - 平多仓 (posiDirection=0) → Direction="1"  ← 反方向
+    /// - 平空仓 (posiDirection=1) → Direction="0"  ← 反方向
+    /// - OffsetFlag="5" (平)
+    ///
+    /// 注：client API 入参 `direction` 的语义仍是 "持仓方向"（让调用方按持仓理解），
+    /// 内部 `new_market_close` 已经会把 direction 取反后传给服务端。
     pub async fn market_close(
         &self,
         symbol: &str,
@@ -386,9 +390,14 @@ impl LbankClient {
         volume: Decimal,
         trade_unit_id: &str,
     ) -> Result<OrderInsertResponse> {
+        // 平仓 direction = 持仓方向的反向 (经实测修正)
+        let opposite = match direction {
+            TradeDirection::Long => TradeDirection::Short,
+            TradeDirection::Short => TradeDirection::Long,
+        };
         let req = OrderInsertRequest::new_market_close(
             symbol,
-            direction,
+            opposite,
             volume.normalize().to_string(),
             trade_unit_id,
         );
@@ -414,9 +423,12 @@ impl LbankClient {
 
     /// 限价平仓
     ///
-    /// 重要：Lbank 平仓 direction 和持仓方向 **相同**（不是反向）。
-    /// 调用方传 `TradeDirection::Long` 表示平**多**仓 (Direction="0")，
-    /// 传 `TradeDirection::Short` 表示平**空**仓 (Direction="1")。
+    /// ⚠️ **实测修正**（来自 `订单逆向.md:627-826`）：Lbank 限价平仓 direction 与持仓方向 **相反**。
+    /// 调用方传 `TradeDirection::Long` 表示平**多**仓 (内部 Direction="1")，
+    /// 传 `TradeDirection::Short` 表示平**空**仓 (内部 Direction="0")。
+    /// - 平多仓 (posiDirection=0) → Direction="1"
+    /// - 平空仓 (posiDirection=1) → Direction="0"
+    /// - OffsetFlag="1" (限价平仓，与市价平 OffsetFlag=5 不同!)
     pub async fn limit_close(
         &self,
         symbol: &str,
@@ -425,11 +437,36 @@ impl LbankClient {
         price: Decimal,
         trade_unit_id: &str,
     ) -> Result<OrderInsertResponse> {
+        // 平仓 direction = 持仓方向的反向 (经实测修正)
+        let opposite = match direction {
+            TradeDirection::Long => TradeDirection::Short,
+            TradeDirection::Short => TradeDirection::Long,
+        };
         let req = OrderInsertRequest::new_limit_close(
             symbol,
-            direction,
+            opposite,
             volume.normalize().to_string(),
             price.normalize().to_string(),
+            trade_unit_id,
+        );
+        self.post("/cfd/cff/v1/SendOrderInsert", &req).await
+    }
+
+    /// **市价平仓 (Raw)** —— direction 直接按传入值发送，**不取反**。
+    ///
+    /// 用于 `op_market_close_with_fallback` 的回退尝试。
+    /// 一般不要直接调用，除非明确知道为什么要这么做。
+    pub async fn post_raw_market_close(
+        &self,
+        symbol: &str,
+        direction: TradeDirection,
+        volume: Decimal,
+        trade_unit_id: &str,
+    ) -> Result<OrderInsertResponse> {
+        let req = OrderInsertRequest::new_market_close(
+            symbol,
+            direction, // raw，client 不取反
+            volume.normalize().to_string(),
             trade_unit_id,
         );
         self.post("/cfd/cff/v1/SendOrderInsert", &req).await
