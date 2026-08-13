@@ -582,37 +582,22 @@ impl LbankClient {
     // Account APIs
     // ========================================================================
 
-    /// 查询账户信息 - 用于验证认证是否有效
-    pub async fn get_account_info(&self) -> Result<AccountInfoResponse> {
+    /// 查询账户余额 - 文档3.2 (sendQryAll)
+    /// 传入 symbol="BTCUSDT" 获取 USDT 余额
+    pub async fn get_account_balance(&self, symbol: &str) -> Result<AggregateInfoResponse> {
         #[derive(Serialize)]
-        struct Request {
-            #[serde(rename = "ProductGroup")]
-            product_group: String,
+        struct Request<'a> {
+            product_group: &'a str,
+            #[serde(rename = "instrumentID")]
+            instrument_id: &'a str,
+            asset: &'a str,
         }
 
-        self.post("/cfd/user/v1.0/Account", &Request {
-            product_group: "SwapU".to_string(),
+        self.post("/cfd/agg/v1/sendQryAll", &Request {
+            product_group: "SwapU",
+            instrument_id: symbol,
+            asset: "USDT",
         }).await
-    }
-
-    /// 查询账户余额 - 文档3.2
-    pub async fn get_account_balance(&self) -> Result<Vec<AssetBalance>> {
-        #[derive(Serialize)]
-        struct Request {
-            #[serde(rename = "ProductGroup")]
-            product_group: String,
-        }
-
-        #[derive(Deserialize)]
-        struct Response {
-            list: Vec<AssetBalance>,
-        }
-
-        let resp: Response = self.post("/cfd/user/v1.0/Account", &Request {
-            product_group: "SwapU".to_string(),
-        }).await?;
-
-        Ok(resp.list)
     }
 
     // ========================================================================

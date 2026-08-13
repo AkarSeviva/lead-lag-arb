@@ -14,7 +14,7 @@
 | 测试项 | 状态 | 说明 |
 |--------|------|------|
 | WebSocket 连接 | ⬜ | 连接 `wss://uaws.rerrkvifj.com` |
-| REST API 连接 | ⬜ | 调用 `/cfd/market/v1.0/SendQryMarketOrder` |
+| REST API 连接 | ✅ | 调用 `/cfd/market/v1.0/SendQryMarketOrder` |
 | 签名验证 | ⬜ | 确认请求通过认证 |
 
 **验证方法**: 观察日志无 401/403 错误

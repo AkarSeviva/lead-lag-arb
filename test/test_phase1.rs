@@ -41,36 +41,27 @@ async fn main() -> Result<()> {
     info!("✅ LbankClient 初始化成功");
 
     // ===========================================
-    // 测试 1: 查询账户信息 (验证认证)
+    // 测试 1: 查询账户余额 (验证认证 + 获取余额)
     // ===========================================
-    info!("\n[Test 1] 查询账户信息...");
-    match client.get_account_info().await {
-        Ok(account) => {
-            info!("✅ 认证成功! 账户信息:");
-            info!("  - 母账户 ID: {:?}", account.parent_id);
-            info!("  - 用户 ID: {:?}", account.uid);
-            info!("  - 账户列表: {:?}", account.list.as_ref().map(|l| l.len()));
-        }
-        Err(e) => {
-            error!("❌ 认证失败: {}", e);
-            error!("请检查 ex-uid, ex-token, ex-device-id 是否正确");
-            return Err(e);
-        }
-    }
-
-    // ===========================================
-    // 测试 2: 查询账户余额
-    // ===========================================
-    info!("\n[Test 2] 查询账户余额...");
-    match client.get_account_balance().await {
+    info!("\n[Test 1] 查询账户余额 (sendQryAll)...");
+    match client.get_account_balance("BTCUSDT").await {
         Ok(balance) => {
-            info!("✅ 余额查询成功:");
-            for item in &balance {
-                info!("  - {}: available={}, balance={}", item.assets, item.available, item.balance);
+            info!("✅ 认证成功! 账户余额:");
+            if let Some(asset_balance) = &balance.asset_balance {
+                info!("  - USDT available: {}", asset_balance.available);
+                info!("  - USDT balance: {}", asset_balance.balance);
+                info!("  - 冻结保证金: {}", asset_balance.frozen_margin);
+                info!("  - 已结盈亏: {}", asset_balance.total_close_profit);
+            } else {
+                info!("  (无 assetBalance 字段)");
+            }
+            if let Some(leverage) = balance.long_leverage {
+                info!("  - 当前杠杆: {}x", leverage);
             }
         }
         Err(e) => {
-            error!("❌ 余额查询失败: {}", e);
+            error!("❌ 查询失败: {}", e);
+            error!("请检查认证凭证是否正确");
             return Err(e);
         }
     }
