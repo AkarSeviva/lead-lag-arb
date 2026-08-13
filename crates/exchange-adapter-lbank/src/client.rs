@@ -227,6 +227,7 @@ impl LbankClient {
     pub async fn get_aggregate_info(&self, symbol: &str) -> Result<AggregateInfo> {
         #[derive(Serialize)]
         struct Request<'a> {
+            #[serde(rename = "productGroup")]
             product_group: &'a str,
             #[serde(rename = "instrumentID")]
             instrument_id: &'a str,
@@ -397,6 +398,7 @@ impl LbankClient {
     pub async fn get_max_leverage(&self, symbol: &str) -> Result<(i32, i32)> {
         #[derive(Serialize)]
         struct Request<'a> {
+            #[serde(rename = "productGroup")]
             product_group: &'a str,
             #[serde(rename = "instrumentID")]
             instrument_id: &'a str,
@@ -552,6 +554,7 @@ impl LbankClient {
     pub async fn query_aggregate_info(&self, symbol: &str) -> Result<AggregateInfoResponse> {
         #[derive(Serialize)]
         struct Request<'a> {
+            #[serde(rename = "productGroup")]
             product_group: &'a str,
             #[serde(rename = "instrumentID")]
             instrument_id: &'a str,
@@ -590,6 +593,7 @@ impl LbankClient {
     pub async fn get_account_balance(&self, symbol: &str) -> Result<AggregateInfoResponse> {
         #[derive(Serialize)]
         struct Request<'a> {
+            #[serde(rename = "productGroup")]
             product_group: &'a str,
             #[serde(rename = "instrumentID")]
             instrument_id: &'a str,
