@@ -567,70 +567,73 @@ pub struct PositionResponse {
 }
 
 /// Order Query Response - 文档5.3
+/// ⚠️ Lbank 实际响应用 PascalCase (首字母大写) 字段名 (如 `OrderSysID`, `InstrumentID`)
+/// 与 PositionResponse 字段名风格一致
 #[derive(Debug, Deserialize, Clone)]
 pub struct OrderResponse {
-    #[serde(rename = "orderSysID")]
+    #[serde(rename = "OrderSysID")]
     pub order_sys_id: String,
-    #[serde(rename = "instrumentID")]
+    #[serde(rename = "InstrumentID")]
     pub instrument_id: String,
     pub direction: Option<String>,
-    #[serde(rename = "offsetFlag")]
+    #[serde(rename = "OffsetFlag")]
     pub offset_flag: Option<String>,
-    #[serde(rename = "orderType")]
+    #[serde(rename = "OrderType")]
     pub order_type: Option<String>,
-    #[serde(rename = "orderStatus")]
+    #[serde(rename = "OrderStatus")]
     pub order_status: Option<String>,
     pub volume: Option<String>,
     pub price: Option<String>,
-    #[serde(rename = "volumeTraded")]
+    #[serde(rename = "VolumeTraded")]
     pub traded_volume: Option<String>,
-    #[serde(rename = "openPrice")]
+    #[serde(rename = "OpenPrice")]
     pub open_price: Option<String>,
     pub fee: Option<String>,
-    #[serde(rename = "businessNo")]
+    #[serde(rename = "BusinessNo")]
     pub business_no: Option<String>,
-    #[serde(rename = "tradePrice")]
+    #[serde(rename = "TradePrice")]
     pub trade_price: Option<String>,
-    #[serde(rename = "positionID")]
+    #[serde(rename = "PositionID")]
     pub position_id: Option<String>,
-    #[serde(rename = "tradeUnitID")]
+    #[serde(rename = "TradeUnitID")]
     pub trade_unit_id: Option<String>,
 }
 
 /// History Order Response (历史委托) - 文档5.3
+/// ⚠️ Lbank 实际响应用 PascalCase (首字母大写) 字段名
 #[derive(Debug, Deserialize)]
 pub struct HistoryOrderResponse {
-    #[serde(rename = "orderSysID")]
+    #[serde(rename = "OrderSysID")]
     pub order_sys_id: String,
-    #[serde(rename = "instrumentID")]
+    #[serde(rename = "InstrumentID")]
     pub instrument_id: String,
     pub direction: Option<String>,
-    #[serde(rename = "offsetFlag")]
+    #[serde(rename = "OffsetFlag")]
     pub offset_flag: Option<String>,
-    #[serde(rename = "orderType")]
+    #[serde(rename = "OrderType")]
     pub order_type: Option<String>,
-    #[serde(rename = "orderStatus")]
+    #[serde(rename = "OrderStatus")]
     pub order_status: Option<String>,
     pub volume: Option<String>,
     pub price: Option<String>,
-    #[serde(rename = "volumeTraded")]
+    #[serde(rename = "VolumeTraded")]
     pub traded_volume: Option<String>,
-    #[serde(rename = "tradePrice")]
+    #[serde(rename = "TradePrice")]
     pub trade_price: Option<String>,
-    #[serde(rename = "openPrice")]
+    #[serde(rename = "OpenPrice")]
     pub open_price: Option<String>,
-    #[serde(rename = "closeProfit")]
+    #[serde(rename = "CloseProfit")]
     pub close_profit: Option<String>,
     pub fee: Option<String>,
-    #[serde(rename = "insertTime")]
+    #[serde(rename = "InsertTime")]
     pub insert_time: Option<i64>,
-    #[serde(rename = "volumeCancled")]
+    #[serde(rename = "VolumeCancled")]
     pub volume_cancled: Option<String>,
-    #[serde(rename = "businessNo")]
+    #[serde(rename = "BusinessNo")]
     pub business_no: Option<String>,
-    #[serde(rename = "positionID")]
+    #[serde(rename = "PositionID")]
     pub position_id: Option<String>,
-    #[serde(rename = "tradeUnitID")]
+    #[serde(rename = "TradeUnitID")]
     pub trade_unit_id: Option<String>,
 }
 
