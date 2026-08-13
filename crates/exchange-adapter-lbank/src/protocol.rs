@@ -345,7 +345,13 @@ impl CloseOrderInsertRequest {
 }
 
 /// Order Insert Response
-#[derive(Debug, Deserialize)]
+///
+/// 所有字段都使用 `#[serde(default)]` 提高容错：
+/// - Lbank 在不同订单类型（市价/限价/带TPSL）返回的字段不完全一致
+/// - 部分字段（如 `minVolume`、`tips`）只在特定场景出现
+/// - 缺失字段时 String 默认为 "" / bool 默认为 false
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
 pub struct OrderInsertResponse {
     #[serde(rename = "offsetFlag")]
     pub offset_flag: String,
@@ -436,8 +442,11 @@ pub struct OrderInsertResponse {
     pub local_id: String,
     #[serde(rename = "volumeTraded")]
     pub volume_traded: String,
+    /// Lbank 部分接口返回部分不返回，部分接口返回 Number，部分返回 String
     #[serde(rename = "minVolume")]
-    pub min_volume: String,
+    pub min_volume: Option<serde_json::Value>,
+    #[serde(rename = "tips")]
+    pub tips: Option<serde_json::Value>,
     pub appid: String,
     #[serde(rename = "tradeUnitID")]
     pub trade_unit_id: String,
@@ -461,7 +470,7 @@ pub struct PositionQueryRequest {
 }
 
 /// Position Query Response - 文档5.1确认
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, Clone)]
 pub struct PositionResponse {
     #[serde(rename = "PositionID")]
     pub position_id: Option<String>,          // 持仓ID
@@ -558,7 +567,7 @@ pub struct PositionResponse {
 }
 
 /// Order Query Response - 文档5.3
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct OrderResponse {
     #[serde(rename = "orderSysID")]
     pub order_sys_id: String,
@@ -782,7 +791,22 @@ pub struct MarketOrderBook {
     pub data: Vec<MarketOrderItem>,
 }
 
-#[derive(Debug, Deserialize)]
+/// 单条深度的服务端响应条目 (扁平数组里的元素)
+#[derive(Debug, Clone, Deserialize)]
+pub struct MarketOrderResponse {
+    #[serde(rename = "data")]
+    pub data: MarketOrderItem,
+    #[serde(default)]
+    #[serde(rename = "table")]
+    pub table: Option<String>,
+}
+
+/// 单个深度条目
+///
+/// ⚠️ **direction 字段语义未确定**：实测数据中全部 Direction="1" 升序排列 (63444.8→65047.3)。
+/// 看起来不像传统买/卖价分布，但需要 `depth` 参数变化或不同接口确认。
+/// 暂时**不再假设 0=Bid/1=Ask**，直接透传 direction 字符串，使用方自行判断。
+#[derive(Debug, Clone, Deserialize)]
 pub struct MarketOrderItem {
     #[serde(rename = "Orders")]
     pub orders: String,
@@ -793,9 +817,26 @@ pub struct MarketOrderItem {
     #[serde(rename = "instrumentID")]
     pub instrument_id: String,
     #[serde(rename = "Direction")]
-    pub direction: String, // "0" = Ask, "1" = Bid
+    pub direction: String,
     #[serde(rename = "ExchangeID")]
     pub exchange_id: String,
+    /// 部分响应可能带有成交数
+    #[serde(rename = "TradedNum", default)]
+    pub traded_num: Option<String>,
+    /// 部分响应可能带有手续费率
+    #[serde(rename = "FeeRate", default)]
+    pub fee_rate: Option<String>,
+}
+
+impl MarketOrderItem {
+    /// 转为统一价格层，方向语义由调用方传入（通过 `is_bid`）
+    pub fn to_level(&self, _is_bid: bool) -> NormalizedPriceLevel {
+        NormalizedPriceLevel {
+            price: self.price.parse().unwrap_or_default(),
+            volume: self.volume.parse().unwrap_or_default(),
+            orders: self.orders.parse().unwrap_or(1),
+        }
+    }
 }
 
 /// 24hr Ticker

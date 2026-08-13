@@ -177,6 +177,14 @@ impl LbankClient {
     }
 
     /// Get order book depth
+    ///
+    /// 该接口返回的是一个**已知问题接口**：
+    /// - 实际响应里 Direction 全部为 "1" 且按价格升序排列
+    /// - 注释 "0"=Ask / "1"=Bid **与实测不符**
+    ///
+    /// 为了不阻塞上层逻辑，本方法返回原始 `MarketOrderItem` 列表，
+    /// **调用方必须自己根据实际数据决定哪条是 best bid / best ask**。
+    /// 建议：先按 Price 排序，价格最低 = best ask，价格最高 = best bid。
     pub async fn get_order_book(
         &self,
         symbol: &str,
@@ -193,24 +201,67 @@ impl LbankClient {
             depth: usize,
         }
 
-        // API 返回扁平数组: [{"table":"MarketOrder","data":{...}}, ...]
-        #[derive(Deserialize)]
-        struct MarketOrderResponse {
-            #[serde(rename = "data")]
-            data: MarketOrderItem,
-            #[serde(default)]
-            #[serde(rename = "table")]
-            table: Option<String>,
-        }
-
-        let resp: Vec<MarketOrderResponse> = self.post("/cfd/market/v1.0/SendQryMarketOrder", &Request {
+        let req = Request {
             product_group: "SwapU",
             exchange_id: "Exchange",
             instrument_id: symbol,
             depth,
-        }).await?;
+        };
+        let body_str = serde_json::to_string(&req)?;
+        let path = "/cfd/market/v1.0/SendQryMarketOrder";
 
-        Ok(resp.into_iter().map(|r| r.data).collect())
+        // 复用 post 但解析逻辑分开处理 - 因为该接口返回值顶层是数组不是 LbankResponse
+        let url = format!("{}{}", self.base_url, path);
+        debug!(url = %url, body = %body_str, "POST request (market order)");
+
+        let headers = self.signer.get_headers("POST", path);
+        let response = self
+            .client
+            .post(&url)
+            .headers(headers.into_reqwest_headers())
+            .json(&req)
+            .send()
+            .await
+            .context("Request failed")?;
+
+        let status = response.status();
+        let body_text = response.text().await.context("Failed to read response")?;
+        debug!(status = %status, "market order body_len={}", body_text.len());
+
+        if !status.is_success() {
+            anyhow::bail!("API request failed: {} - {}", status, body_text);
+        }
+
+        // 解析顶层是 `{"code":200,"data":[{...},{...}]}` 还是直接数组
+        let parsed: LbankResponse<Vec<MarketOrderResponse>> =
+            serde_json::from_str(&body_text).context("Failed to parse market order response")?;
+
+        if !parsed.is_success() {
+            anyhow::bail!("Market order API error: code={}, msg={:?}", parsed.code, parsed.msg);
+        }
+
+        let items = parsed.data.unwrap_or_default();
+
+        // 详尽 debug log，记录每条数据的 direction 和价格
+        for (idx, item) in items.iter().take(5).enumerate() {
+            debug!(
+                idx = idx,
+                direction = %item.data.direction,
+                price = %item.data.price,
+                volume = %item.data.volume,
+                orders = %item.data.orders,
+                "market order item (first 5)"
+            );
+        }
+        debug!(
+            total_items = items.len(),
+            unique_directions = ?items.iter().map(|i| i.data.direction.clone()).collect::<std::collections::HashSet<_>>(),
+            first_price = ?items.iter().next().map(|i| i.data.price.clone()),
+            last_price = ?items.iter().last().map(|i| i.data.price.clone()),
+            "market order summary"
+        );
+
+        Ok(items.into_iter().map(|r| r.data).collect())
     }
 
     /// Get instrument info
@@ -321,6 +372,11 @@ impl LbankClient {
     }
 
     /// 市价平仓 - 文档3.5
+    ///
+    /// 重要：Lbank 平仓 direction 和持仓方向 **相同**（不是反向）。
+    /// - 平多仓 (posiDirection=0) → Direction="0"
+    /// - 平空仓 (posiDirection=1) → Direction="1"
+    /// 注意：本方法的语义和开仓一致；调用方传 `TradeDirection::Long` 表示平**多**仓。
     pub async fn market_close(
         &self,
         symbol: &str,
@@ -355,6 +411,10 @@ impl LbankClient {
     }
 
     /// 限价平仓
+    ///
+    /// 重要：Lbank 平仓 direction 和持仓方向 **相同**（不是反向）。
+    /// 调用方传 `TradeDirection::Long` 表示平**多**仓 (Direction="0")，
+    /// 传 `TradeDirection::Short` 表示平**空**仓 (Direction="1")。
     pub async fn limit_close(
         &self,
         symbol: &str,
