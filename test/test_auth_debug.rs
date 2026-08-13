@@ -60,9 +60,9 @@ fn main() -> anyhow::Result<()> {
     output.push_str("\n");
 
     // 测试 2: 账户余额
-    output.push_str("【测试 2】账户余额 (sendQryAll)\n");
+    output.push_str("【测试 2】账户余额 (get_account_balance)\n");
     output.push_str("----------------------------------------\n");
-    match rt.block_on(client.get_aggregate_info("BTCUSDT")) {
+    match rt.block_on(client.get_account_balance("BTCUSDT")) {
         Ok(info) => {
             output.push_str("✅ 成功!\n\n");
             if let Some(balance) = &info.asset_balance {
