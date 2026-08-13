@@ -486,22 +486,72 @@ impl LbankClient {
 
     /// 查询当前持仓 - 文档5.1
     pub async fn query_positions(&self) -> Result<Vec<PositionResponse>> {
-        #[derive(Deserialize)]
-        struct PositionListResponse {
-            data: Vec<PositionResponse>,
+        let body_text = self.get_raw("/cfd/query/v1.0/Position", Some(&[
+            ("ProductGroup", "SwapU"),
+            ("Valid", "1"),
+            ("pageIndex", "1"),
+            ("pageSize", "1000"),
+        ])).await?;
+        
+        // 解析 JSON，处理两种可能的格式:
+        // 1. {"code":200,"data":{"data":[...]}} - 嵌套格式
+        // 2. {"code":200,"data":[...]} - 直接数组格式
+        let json: serde_json::Value = serde_json::from_str(&body_text)?;
+        
+        let code = json.get("code").and_then(|v| v.as_i64()).unwrap_or(0);
+        if code != 200 {
+            let msg = json.get("message").and_then(|v| v.as_str()).unwrap_or("Unknown error");
+            anyhow::bail!("API error: {} - {}", code, msg);
         }
         
-        let resp: LbankResponse<PositionListResponse> = self.get(
-            "/cfd/query/v1.0/Position",
-            Some(&[
-                ("ProductGroup", "SwapU"),
-                ("Valid", "1"),
-                ("pageIndex", "1"),
-                ("pageSize", "1000"),
-            ]),
-        ).await?;
+        // 提取 data 字段
+        let data_array = if let Some(arr) = json.get("data").and_then(|d| d.get("data")).and_then(|d| d.as_array()) {
+            arr.clone()
+        } else if let Some(arr) = json.get("data").and_then(|d| d.as_array()) {
+            arr.clone()
+        } else {
+            // data 为 null 或空对象，返回空数组
+            return Ok(Vec::new());
+        };
         
-        Ok(resp.into_result()?.data)
+        // 反序列化持仓列表
+        let positions: Vec<PositionResponse> = serde_json::from_value(serde_json::Value::Array(data_array))?;
+        Ok(positions)
+    }
+    
+    /// 获取原始响应文本
+    async fn get_raw(&self, path: &str, query: Option<&[(&str, &str)]>) -> Result<String> {
+        
+        let headers = self.signer.get_headers("GET", path);
+        let mut url = format!("{}{}", self.base_url, path);
+
+        if let Some(query) = query {
+            let query_str: String = query
+                .iter()
+                .map(|(k, v)| format!("{}={}", k, v))
+                .collect::<Vec<_>>()
+                .join("&");
+            url = format!("{}?{}", url, query_str);
+        }
+
+        debug!(url = %url, "GET request");
+
+        let response = self.client.get(&url)
+            .headers(headers.into_reqwest_headers())
+            .send().await
+            .context("Request failed")?;
+
+        let status = response.status();
+        let body_text = response.text().await.context("Failed to read response")?;
+
+        debug!(status = %status, body = %body_text);
+
+        if !status.is_success() {
+            error!(status = %status, body = %body_text, "Request failed");
+            anyhow::bail!("API request failed: {} - {}", status, body_text);
+        }
+
+        Ok(body_text)
     }
 
     /// 查询触发单 - 文档4.3
@@ -577,11 +627,6 @@ impl LbankClient {
 
     /// 查询当前订单
     pub async fn query_orders(&self, symbol: Option<&str>) -> Result<Vec<OrderResponse>> {
-        #[derive(Deserialize)]
-        struct OrderListResponse {
-            data: Vec<OrderResponse>,
-        }
-        
         let mut params = vec![
             ("ProductGroup", "SwapU"),
             ("ExchangeID", "Exchange"),
@@ -593,8 +638,28 @@ impl LbankClient {
             params.push(("InstrumentID", s));
         }
 
-        let resp: LbankResponse<OrderListResponse> = self.get("/cfd/query/v1.0/Order", Some(&params)).await?;
-        Ok(resp.into_result()?.data)
+        let body_text = self.get_raw("/cfd/query/v1.0/Order", Some(&params)).await?;
+        
+        // 解析 JSON，处理两种可能的格式
+        let json: serde_json::Value = serde_json::from_str(&body_text)?;
+        
+        let code = json.get("code").and_then(|v| v.as_i64()).unwrap_or(0);
+        if code != 200 {
+            let msg = json.get("message").and_then(|v| v.as_str()).unwrap_or("Unknown error");
+            anyhow::bail!("API error: {} - {}", code, msg);
+        }
+        
+        // 提取 data 字段
+        let data_array = if let Some(arr) = json.get("data").and_then(|d| d.get("data")).and_then(|d| d.as_array()) {
+            arr.clone()
+        } else if let Some(arr) = json.get("data").and_then(|d| d.as_array()) {
+            arr.clone()
+        } else {
+            return Ok(Vec::new());
+        };
+        
+        let orders: Vec<OrderResponse> = serde_json::from_value(serde_json::Value::Array(data_array))?;
+        Ok(orders)
     }
 
     // ========================================================================
