@@ -35,8 +35,13 @@ const VOLUME_STR: &str = "0.0001";
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(1); // 放慢轮询，避免 429
 
-/// Phase 之间强制间隔，避免触发 Cloudflare 反爬 (默认 1500ms)
-const PHASE_INTER_DELAY: Duration = Duration::from_millis(1500);
+/// Phase 之间强制间隔，避免触发 Cloudflare 反爬 (默认 4000ms)
+/// CF rate limit 大约 ~20 req/min, 每个请求间隔 ≥2s 才能稳
+const PHASE_INTER_DELAY: Duration = Duration::from_millis(4000);
+
+/// 客户端单请求最小间隔 (rate limiter)
+/// 任意连续两个 API 调用至少间隔 250ms
+const CLIENT_REQUEST_INTERVAL: Duration = Duration::from_millis(250);
 
 // ============================================================================
 // 工具：轮询等待 + 测试报告器
@@ -391,20 +396,26 @@ pub async fn op_query_pending_orders_with_retry(
     symbol: &str,
     max_attempts: u32,
 ) -> anyhow::Result<Vec<exchange_adapter_lbank::protocol::OrderResponse>> {
-    let mut backoff = Duration::from_secs(2);
+    let mut backoff = Duration::from_secs(5); // 5s 起步
     for attempt in 1..=max_attempts {
         match op_query_pending_orders(client, symbol).await {
             Ok(orders) => return Ok(orders),
             Err(e) => {
                 let msg = format!("{:#?}", e);
-                // 429 / Cloudflare / rate-limit / network error 都重试
+                // 429 / Cloudflare / rate-limit / network / JSON 解析失败 (CF HTML) 都重试
                 let retryable = msg.contains("429")
                     || msg.contains("Too Many Requests")
                     || msg.contains("rate")
                     || msg.contains("cloudflare")
+                    || msg.contains("Cloudflare")
                     || msg.contains("Just a moment")
+                    || msg.contains("Access denied")
+                    || msg.contains("being rate limited")
+                    || msg.contains("1015")
                     || msg.contains("connection")
-                    || msg.contains("timed out");
+                    || msg.contains("timed out")
+                    || msg.contains("missing field") // CF HTML 当 JSON 解析了
+                    || msg.contains("EOF while parsing");
                 if !retryable || attempt == max_attempts {
                     return Err(e);
                 }
@@ -415,7 +426,7 @@ pub async fn op_query_pending_orders_with_retry(
                     "op_query_pending_orders_with_retry: 429/network, retrying"
                 );
                 tokio::time::sleep(backoff).await;
-                backoff = (backoff * 2).min(Duration::from_secs(15));
+                backoff = (backoff * 2).min(Duration::from_secs(60));
             }
         }
     }
@@ -453,6 +464,8 @@ pub async fn op_wait_for_position(
     let label = format!("wait_for_position_d{:?}", expected_direction);
     let mut attempts = 0;
     let start = Instant::now();
+    // 拉长轮询间隔到 1.5s，进一步降低 429 概率
+    let poll_interval = Duration::from_millis(1500);
     while start.elapsed() < DEFAULT_TIMEOUT {
         attempts += 1;
         match op_get_positions(client).await {
@@ -487,10 +500,16 @@ pub async fn op_wait_for_position(
                 );
             }
             Err(e) => {
+                let msg = format!("{:#?}", e);
+                // 如果是 429 / Cloudflare, 立即跳出等待，避免被风控进一步封禁
+                if msg.contains("429") || msg.contains("Cloudflare") || msg.contains("1015") {
+                    warn!(label = %label, error = %e, "op_wait_for_position: hit 429, abort");
+                    return None;
+                }
                 warn!(label = %label, error = %e, "query_positions failed during wait");
             }
         }
-        tokio::time::sleep(DEFAULT_POLL_INTERVAL).await;
+        tokio::time::sleep(poll_interval).await;
     }
     warn!(label = %label, attempts = attempts, "wait_for_position timeout");
     None
@@ -1001,7 +1020,7 @@ async fn phase_g_final_state(
         Err(e) => reporter.fail(&format!("查询失败: {:#?}", e)),
     }
 
-    match op_query_pending_orders_with_retry(client, SYMBOL, 4).await {
+    match op_query_pending_orders_with_retry(client, SYMBOL, 6).await {
         Ok(orders) => {
             reporter.success(&format!("最终挂单数: {}", orders.len()));
             for order in orders {
@@ -1015,7 +1034,17 @@ async fn phase_g_final_state(
                 ));
             }
         }
-        Err(e) => reporter.fail(&format!("查询挂单失败: {:#?}", e)),
+        Err(e) => {
+            let msg = format!("{:#?}", e);
+            if msg.contains("429") || msg.contains("1015") || msg.contains("Cloudflare") {
+                reporter.warn(&format!(
+                    "查询挂单被 CF 限速 (429/1015): {:#?}",
+                    e
+                ));
+            } else {
+                reporter.fail(&format!("查询挂单失败: {:#?}", e));
+            }
+        }
     }
     reporter.section_end();
 }
