@@ -210,7 +210,7 @@ fn main() -> anyhow::Result<()> {
     let limit_price_short = f64::from_str(&current_price).unwrap_or(0.0) - 10.0;
     output.push_str(&format!("  挂单价格: {} (市价 {} - 10)\n", limit_price_short, current_price));
 
-    match rt.block_on(client.limit_open(SYMBOL, TradeDirection::Short, volume, Decimal::from_f64_retain(limit_price_short).unwrap_or_default())) {
+    match rt.block_on(client.limit_open(SYMBOL, TradeDirection::Short, volume, Decimal::from_str(&format!("{:.4}", limit_price_short)).unwrap_or_default())) {
         Ok(resp) => {
             output.push_str(&format!("✅ 限价开空仓请求已发送!\n"));
             output.push_str(&format!("  OrderSysID: {}\n", resp.order_sys_id));
@@ -311,7 +311,7 @@ fn main() -> anyhow::Result<()> {
 
             let pos_str = pos.position.as_deref().unwrap_or(VOLUME_STR);
             let vol: Decimal = pos_str.parse().unwrap_or(volume);
-            match rt.block_on(client.limit_close(SYMBOL, TradeDirection::Short, vol, Decimal::from_f64_retain(close_price).unwrap_or_default(), trade_unit_id)) {
+            match rt.block_on(client.limit_close(SYMBOL, TradeDirection::Short, vol, Decimal::from_str(&format!("{:.4}", close_price)).unwrap_or_default(), trade_unit_id)) {
                 Ok(resp) => {
                     output.push_str(&format!("✅ 限价平空仓请求已发送!\n"));
                     output.push_str(&format!("  OrderSysID: {}\n", resp.order_sys_id));

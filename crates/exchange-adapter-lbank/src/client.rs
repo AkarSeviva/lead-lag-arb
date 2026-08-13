@@ -86,7 +86,7 @@ impl LbankClient {
         let headers = self.signer.get_headers("POST", path);
         let url = format!("{}{}", self.base_url, path);
 
-        debug!(url = %url, "POST request");
+        debug!(url = %url, body = %body_str, "POST request");
 
         let response = self
             .client
@@ -198,6 +198,9 @@ impl LbankClient {
         struct MarketOrderResponse {
             #[serde(rename = "data")]
             data: MarketOrderItem,
+            #[serde(default)]
+            #[serde(rename = "table")]
+            table: Option<String>,
         }
 
         let resp: Vec<MarketOrderResponse> = self.post("/cfd/market/v1.0/SendQryMarketOrder", &Request {
@@ -312,7 +315,7 @@ impl LbankClient {
         let req = OrderInsertRequest::new_market_open(
             symbol,
             direction,
-            volume.to_string().parse().unwrap_or(0.0),
+            volume.normalize().to_string(),
         );
         self.post("/cfd/cff/v1/SendOrderInsert", &req).await
     }
@@ -328,7 +331,7 @@ impl LbankClient {
         let req = OrderInsertRequest::new_market_close(
             symbol,
             direction,
-            volume.to_string().parse().unwrap_or(0.0),
+            volume.normalize().to_string(),
             trade_unit_id,
         );
         self.post("/cfd/cff/v1/SendOrderInsert", &req).await
@@ -345,8 +348,8 @@ impl LbankClient {
         let req = OrderInsertRequest::new_limit_open(
             symbol,
             direction,
-            volume.to_string().parse().unwrap_or(0.0),
-            price.to_string().parse().unwrap_or(0.0),
+            volume.normalize().to_string(),
+            price.normalize().to_string(),
         );
         self.post("/cfd/cff/v1/SendOrderInsert", &req).await
     }
@@ -363,8 +366,8 @@ impl LbankClient {
         let req = OrderInsertRequest::new_limit_close(
             symbol,
             direction,
-            volume.to_string().parse().unwrap_or(0.0),
-            price.to_string().parse().unwrap_or(0.0),
+            volume.normalize().to_string(),
+            price.normalize().to_string(),
             trade_unit_id,
         );
         self.post("/cfd/cff/v1/SendOrderInsert", &req).await

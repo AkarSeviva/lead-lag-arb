@@ -191,8 +191,9 @@ pub struct OrderInsertRequest {
     pub order_price_type: String, // "0" = Limit, "4" = Market
     #[serde(rename = "OrderType")]
     pub order_type: String,     // "0" = Limit, "1" = Market
-    pub volume: f64,
-    pub price: Option<f64>,
+    pub volume: String,
+    #[serde(rename = "Price")]
+    pub price: Option<String>,
     #[serde(rename = "orderProportion")]
     pub order_proportion: String,
     #[serde(rename = "TradeUnitID", skip_serializing_if = "Option::is_none")]
@@ -204,7 +205,7 @@ impl OrderInsertRequest {
     pub fn new_market_open(
         symbol: &str,
         direction: TradeDirection,
-        volume: f64,
+        volume: String,
     ) -> Self {
         Self {
             instrument_id: symbol.to_string(),
@@ -224,7 +225,7 @@ impl OrderInsertRequest {
     pub fn new_market_close(
         symbol: &str,
         direction: TradeDirection,
-        volume: f64,
+        volume: String,
         trade_unit_id: &str,
     ) -> Self {
         Self {
@@ -245,8 +246,8 @@ impl OrderInsertRequest {
     pub fn new_limit_open(
         symbol: &str,
         direction: TradeDirection,
-        volume: f64,
-        price: f64,
+        volume: String,
+        price: String,
     ) -> Self {
         Self {
             instrument_id: symbol.to_string(),
@@ -266,8 +267,8 @@ impl OrderInsertRequest {
     pub fn new_limit_close(
         symbol: &str,
         direction: TradeDirection,
-        volume: f64,
-        price: f64,
+        volume: String,
+        price: String,
         trade_unit_id: &str,
     ) -> Self {
         Self {
@@ -350,6 +351,7 @@ pub struct OrderInsertResponse {
     pub offset_flag: String,
     #[serde(rename = "orderType")]
     pub order_type: String,
+    #[serde(rename = "reserveMode")]
     pub reserve_mode: String,
     pub fee: String,
     #[serde(rename = "frozenFee")]
@@ -413,6 +415,7 @@ pub struct OrderInsertResponse {
     pub related_order_sys_id: String,
     #[serde(rename = "positionID")]
     pub position_id: String,
+    #[serde(rename = "mockResp")]
     pub mock_resp: bool,
     #[serde(rename = "deriveSource")]
     pub derive_source: String,
