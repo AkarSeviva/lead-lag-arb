@@ -2036,6 +2036,8 @@ dependencies = [
  "anyhow",
  "exchange-adapter-lbank",
  "reqwest",
+ "serde",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",
