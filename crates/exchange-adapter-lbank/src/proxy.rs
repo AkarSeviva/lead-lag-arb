@@ -68,7 +68,8 @@ impl ProxyClient {
         let mut builder = reqwest::Client::builder()
             .pool_idle_timeout(Duration::from_secs(90))
             .tcp_keepalive(Duration::from_secs(30))
-            .timeout(timeout);
+            .timeout(timeout)
+            .no_proxy();  // 禁用环境变量代理
 
         if self.config.enabled {
             let proxy_url = format!("http://{}", self.config.proxy_addr);
