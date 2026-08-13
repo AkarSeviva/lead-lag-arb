@@ -165,6 +165,24 @@ impl LbankHeaders {
             HeaderValue::from_str(&self.user_agent).unwrap()
         );
 
+        // Browser fingerprint headers
+        headers.insert(HeaderName::from_static("origin"), HeaderValue::from_static("https://www.lbank.com"));
+        headers.insert(HeaderName::from_static("referer"), HeaderValue::from_static("https://www.lbank.com/"));
+        headers.insert(HeaderName::from_static("source"), HeaderValue::from_static("4"));
+        
+        // sec-ch-ua headers (browser fingerprint)
+        headers.insert(HeaderName::from_static("sec-ch-ua"), HeaderValue::from_static("\"Not=A?Brand\";v=\"99\", \"Google Chrome\";v=\"151\", \"Chromium\";v=\"151\""));
+        headers.insert(HeaderName::from_static("sec-ch-ua-mobile"), HeaderValue::from_static("?0"));
+        headers.insert(HeaderName::from_static("sec-ch-ua-platform"), HeaderValue::from_static("\"Windows\""));
+        headers.insert(HeaderName::from_static("sec-fetch-dest"), HeaderValue::from_static("empty"));
+        headers.insert(HeaderName::from_static("sec-fetch-mode"), HeaderValue::from_static("cors"));
+        headers.insert(HeaderName::from_static("sec-fetch-site"), HeaderValue::from_static("cross-site"));
+
+        // Accept headers
+        headers.insert(HeaderName::from_static("accept"), HeaderValue::from_static("*/*"));
+        headers.insert(HeaderName::from_static("accept-encoding"), HeaderValue::from_static("gzip, deflate, br"));
+        headers.insert(HeaderName::from_static("accept-language"), HeaderValue::from_str(&self.language).unwrap());
+
         headers
     }
 }
