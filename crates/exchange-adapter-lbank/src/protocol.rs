@@ -616,11 +616,18 @@ pub struct MarketOrderBook {
 
 #[derive(Debug, Deserialize)]
 pub struct MarketOrderItem {
+    #[serde(rename = "Orders")]
     pub orders: String,
+    #[serde(rename = "Price")]
     pub price: String,
+    #[serde(rename = "Volume")]
     pub volume: String,
+    #[serde(rename = "InstrumentID")]
+    pub instrument_id: String,
     #[serde(rename = "Direction")]
     pub direction: String, // "0" = Ask, "1" = Bid
+    #[serde(rename = "ExchangeID")]
+    pub exchange_id: String,
 }
 
 /// 24hr Ticker
