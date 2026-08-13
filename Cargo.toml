@@ -15,6 +15,7 @@ members = [
     "crates/persistence",
     "crates/metrics",
     "apps/live-trader",
+    "test",
 ]
 
 [workspace.package]

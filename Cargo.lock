@@ -2030,6 +2030,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "test"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "exchange-adapter-lbank",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "thiserror"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"

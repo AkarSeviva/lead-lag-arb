@@ -559,6 +559,8 @@ pub struct AggregateInfoResponse {
 /// Asset Balance - 文档3.2
 #[derive(Debug, Deserialize)]
 pub struct AssetBalance {
+    #[serde(rename = "assets")]
+    pub assets: String,
     pub available: String,
     pub balance: String,
     #[serde(rename = "realAvailable")]
@@ -571,6 +573,17 @@ pub struct AssetBalance {
     pub cross_margin: Option<String>,
     #[serde(rename = "marginAble")]
     pub margin_able: Option<String>,
+}
+
+/// Account Info Response - 文档3.2
+#[derive(Debug, Deserialize)]
+pub struct AccountInfoResponse {
+    #[serde(rename = "parentId")]
+    pub parent_id: Option<i64>,
+    #[serde(rename = "uid")]
+    pub uid: String,
+    #[serde(rename = "list")]
+    pub list: Option<Vec<AssetBalance>>,
 }
 
 /// Market Order Book (深度)
