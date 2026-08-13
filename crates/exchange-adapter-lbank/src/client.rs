@@ -621,9 +621,10 @@ impl LbankClient {
         Ok(positions)
     }
     
-    /// 获取原始响应文本
-    async fn get_raw(&self, path: &str, query: Option<&[(&str, &str)]>) -> Result<String> {
-        
+    /// 获取原始响应文本 (pub 供调试/自定义解析使用)
+    pub async fn get_raw(&self, path: &str, query: Option<&[(&str, &str)]>) -> Result<String> {
+
+
         let headers = self.signer.get_headers("GET", path);
         let mut url = format!("{}{}", self.base_url, path);
 

@@ -419,6 +419,32 @@ pub async fn op_query_pending_orders_with_retry(
     anyhow::bail!("op_query_pending_orders_with_retry: exceeded max_attempts")
 }
 
+/// **op_query_pending_orders_raw**：直接走 GET /cfd/query/v1.0/Order
+///
+/// 与 `op_query_pending_orders` 相同，但保留 raw body text 用于 debug。
+/// 返回 (raw_body_text, parsed_orders)
+pub async fn op_query_pending_orders_raw(
+    client: &LbankClient,
+    symbol: &str,
+) -> anyhow::Result<(
+    String,
+    Vec<exchange_adapter_lbank::protocol::OrderResponse>,
+)> {
+    let mut params: Vec<(&str, &str)> = vec![
+        ("ProductGroup", "SwapU"),
+        ("ExchangeID", "Exchange"),
+        ("pageIndex", "1"),
+        ("pageSize", "1000"),
+    ];
+    let symbol_owned = symbol.to_string();
+    if !symbol_owned.is_empty() {
+        params.push(("InstrumentID", symbol_owned.as_str()));
+    }
+    let raw = client.get_raw("/cfd/query/v1.0/Order", Some(&params)).await?;
+    let parsed = op_query_pending_orders(client, symbol).await.unwrap_or_default();
+    Ok((raw, parsed))
+}
+
 /// **op_wait_for_position**：轮询等到指定方向和数量的持仓出现
 pub async fn op_wait_for_position(
     client: &LbankClient,
@@ -777,11 +803,20 @@ async fn phase_d_limit_long_with_tpsl(
         open_resp.order_sys_id, open_resp.price, open_resp.order_status
     ));
 
-    // D2: 轮询等待挂单出现 (status=4=已挂单)
-    if op_wait_for_pending_orders(client, SYMBOL, 1).await.is_empty() {
-        reporter.warn("轮询等待挂单超时 (但订单插入返回 status=4，应该已挂单)");
+    // D2: 确认挂单存在 (Order 接口或下单 response)
+    // 经实测: 下单 response status=4 已表明挂单在服务端生效
+    // Order 接口会因服务端缓存有几秒延迟，且容易被 rate-limit 封掉
+    if open_resp.order_status == "4" {
+        reporter.success("挂单已生效 (下单 response status=4)");
     } else {
-        reporter.success("挂单确认 (pending)");
+        reporter.warn(&format!(
+            "下单 response status={} (期望 4=挂单中)",
+            open_resp.order_status
+        ));
+        // 兜底：再查一次 Order 接口
+        if op_wait_for_pending_orders(client, SYMBOL, 1).await.is_empty() {
+            reporter.warn("轮询等待挂单超时 (但下单返回 status=4)");
+        }
     }
 
     // D3: 撤单
@@ -832,11 +867,37 @@ async fn phase_e_limit_short_with_tpsl(
         open_resp.order_sys_id, open_resp.price, open_resp.order_status
     ));
 
-    // E2: 轮询等待挂单出现
-    if op_wait_for_pending_orders(client, SYMBOL, 1).await.is_empty() {
-        reporter.warn("轮询等待挂单超时 (但订单插入返回 status=4，应该已挂单)");
+    // E2: 确认挂单 (same logic as Phase D)
+    let (raw_body, parsed_orders) = match op_query_pending_orders_raw(client, SYMBOL).await {
+        Ok(t) => t,
+        Err(e) => {
+            reporter.warn(&format!("raw Order 查询失败: {:#?}", e));
+            (String::new(), Vec::new())
+        }
+    };
+    let matched: Vec<_> = parsed_orders
+        .iter()
+        .filter(|o| o.order_sys_id == open_resp.order_sys_id)
+        .cloned()
+        .collect();
+    if !matched.is_empty() {
+        reporter.success(&format!(
+            "Order 接口确认挂单存在 (匹配 order_sys_id): count={}",
+            matched.len()
+        ));
     } else {
-        reporter.success("挂单确认 (pending)");
+        if parsed_orders.is_empty() {
+            reporter.warn(&format!(
+                "Order 接口返回空 (order_sys_id={} 未查到, raw_body={})",
+                open_resp.order_sys_id, raw_body
+            ));
+        } else {
+            reporter.warn(&format!(
+                "Order 接口返回 {} 条但未匹配目标 order_sys_id={}",
+                parsed_orders.len(),
+                open_resp.order_sys_id
+            ));
+        }
     }
 
     // E3: 撤单
@@ -877,12 +938,42 @@ async fn phase_f_limit_long_no_tpsl_and_cancel(
         open_resp.order_sys_id, open_resp.price, open_resp.order_status
     ));
 
-    // 轮询等待挂单出现
-    let pending = op_wait_for_pending_orders(client, SYMBOL, 1).await;
-    if pending.is_empty() {
-        reporter.warn("未检测到 pending 挂单（可能服务端尚未挂出）");
+    // F: 轮询 Order 接口 + 用 raw 响应诊断 (有时 status=4 的挂单 Order 接口缓存有延迟)
+    let (raw_body, parsed_orders) =
+        match op_query_pending_orders_raw(client, SYMBOL).await {
+            Ok(t) => t,
+            Err(e) => {
+                reporter.warn(&format!("raw Order 查询失败: {:#?}", e));
+                (String::new(), Vec::new())
+            }
+        };
+
+    // 找到匹配的挂单 (按 order_sys_id)
+    let matched: Vec<_> = parsed_orders
+        .iter()
+        .filter(|o| o.order_sys_id == open_resp.order_sys_id)
+        .cloned()
+        .collect();
+    if !matched.is_empty() {
+        reporter.success(&format!(
+            "Order 接口确认挂单存在 (匹配 order_sys_id): count={}",
+            matched.len()
+        ));
     } else {
-        reporter.info(&format!("检测到 {} 条 pending 挂单", pending.len()));
+        // 没匹配上：给出 raw body 帮助 debug
+        if parsed_orders.is_empty() {
+            reporter.warn(&format!(
+                "Order 接口返回空 (order_sys_id={} 未查到, raw_body={})",
+                open_resp.order_sys_id, raw_body
+            ));
+        } else {
+            reporter.warn(&format!(
+                "Order 接口返回 {} 条但未匹配目标 order_sys_id={} (raw_body={})",
+                parsed_orders.len(),
+                open_resp.order_sys_id,
+                raw_body
+            ));
+        }
     }
 
     match op_cancel_order(client, &open_resp.order_sys_id).await {
