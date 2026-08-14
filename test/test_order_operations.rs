@@ -1097,12 +1097,15 @@ async fn phase_h_leverage_and_stops(client: &LbankClient, reporter: &mut TestRep
     // ── H3: 获取当前中间价 ─────────────────────────────────────────────────────
     reporter.sub("H3. 获取当前中间价 (用于设置止损止盈)");
     gap!();
-    let mid_price: f64 = match client.get_order_book(SYMBOL, 5).await {
+    let mid_price: f64 = match client.get_order_book(SYMBOL, 25).await {
         Ok(orders) => {
             if orders.is_empty() {
                 reporter.fail("订单簿为空，无法获取中间价");
                 return;
             }
+            // HAR 数据证实:
+            //   - Direction "0" = 买盘 Bid (价格降序，最大=最优买价)
+            //   - Direction "1" = 卖盘 Ask (价格升序，最小=最优卖价)
             let best_bid: f64 = orders
                 .iter()
                 .filter(|o| o.direction == "0")
@@ -1114,13 +1117,23 @@ async fn phase_h_leverage_and_stops(client: &LbankClient, reporter: &mut TestRep
                 .map(|o| o.price.parse::<f64>().unwrap_or(f64::MAX))
                 .fold(f64::MAX, |a, b| a.min(b));
             if best_bid == 0.0 || best_ask == f64::MAX {
-                reporter.fail("无法分离 bid/ask");
+                reporter.fail(&format!(
+                    "无法分离 bid/ask (depth={} 可能不足): best_bid={}, best_ask={}",
+                    orders.len(), best_bid, best_ask
+                ));
+                return;
+            }
+            if best_bid >= best_ask {
+                reporter.fail(&format!(
+                    "订单簿异常: best_bid={} >= best_ask={}",
+                    best_bid, best_ask
+                ));
                 return;
             }
             let mid = (best_bid + best_ask) / 2.0;
             reporter.info(&format!(
-                "best_bid={}, best_ask={}, mid_price={}",
-                best_bid, best_ask, mid
+                "best_bid={}, best_ask={}, mid_price={} (depth={})",
+                best_bid, best_ask, mid, orders.len()
             ));
             mid
         }

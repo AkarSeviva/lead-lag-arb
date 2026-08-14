@@ -208,13 +208,17 @@ impl LbankClient {
 
     /// Get order book depth
     ///
-    /// 该接口返回的是一个**已知问题接口**：
-    /// - 实际响应里 Direction 全部为 "1" 且按价格升序排列
-    /// - 注释 "0"=Ask / "1"=Bid **与实测不符**
+    /// **响应格式 (HAR 实证)**:
+    /// ```json
+    /// {"code":200,"data":[{"data":{"Orders":"1","Price":"62830.0","Volume":"28.8903",
+    ///   "InstrumentID":"BTCUSDT","Direction":"1","ExchangeID":"Exchange"},"table":"MarketOrder"}, ...]}
+    /// ```
+    /// - `Direction: "0"` = 买盘 Bid (价格降序，最大=最优买价)
+    /// - `Direction: "1"` = 卖盘 Ask (价格升序，最小=最优卖价)
     ///
-    /// 为了不阻塞上层逻辑，本方法返回原始 `MarketOrderItem` 列表，
-    /// **调用方必须自己根据实际数据决定哪条是 best bid / best ask**。
-    /// 建议：先按 Price 排序，价格最低 = best ask，价格最高 = best bid。
+    /// ⚠️ **容错策略**: VPS 实测服务端曾返回 ~100KB 混合数据 (所有品种)，单条脏数据
+    /// 会让整体反序列化失败。先尝试严格解析；失败时降级为宽松 JSON 解析 + 客户端按
+    /// `InstrumentID` 过滤 + 跳过缺字段的脏条目。
     pub async fn get_order_book(
         &self,
         symbol: &str,
@@ -240,7 +244,6 @@ impl LbankClient {
         let body_str = serde_json::to_string(&req)?;
         let path = "/cfd/market/v1.0/SendQryMarketOrder";
 
-        // 复用 post 但解析逻辑分开处理 - 因为该接口返回值顶层是数组不是 LbankResponse
         let url = format!("{}{}", self.base_url, path);
         debug!(url = %url, body = %body_str, "POST request (market order)");
 
@@ -262,36 +265,72 @@ impl LbankClient {
             anyhow::bail!("API request failed: {} - {}", status, body_text);
         }
 
-        // 解析顶层是 `{"code":200,"data":[{...},{...}]}` 还是直接数组
-        let parsed: LbankResponse<Vec<MarketOrderResponse>> =
+        // 解析顶层，宽松拿到 data 数组 + code
+        let top: serde_json::Value =
             serde_json::from_str(&body_text).context("Failed to parse market order response")?;
+        let code = top.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
+        if code != 200 {
+            let msg = top.get("message").and_then(|v| v.as_str()).unwrap_or("");
+            anyhow::bail!("Market order API error: code={}, msg={}", code, msg);
+        }
+        let arr: Vec<serde_json::Value> = top
+            .get("data")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("market order response missing data array"))?;
 
-        if !parsed.is_success() {
-            anyhow::bail!("Market order API error: code={}, msg={:?}", parsed.code, parsed.msg);
+        let total_raw = arr.len();
+        let mut items: Vec<MarketOrderItem> = Vec::with_capacity(arr.len());
+        let mut skipped = 0usize;
+
+        // 尝试严格反序列化为 MarketOrderResponse；失败则降级逐条解析
+        for entry in &arr {
+            // 每条形如 {data: {...}, table: "..."} 或直接 {...}
+            let raw = entry.get("data").unwrap_or(entry);
+            // 客户端按 InstrumentID 过滤 (HAR 实证每条都有 InstrumentID)
+            let entry_sym = raw
+                .get("InstrumentID")
+                .or_else(|| raw.get("instrumentID"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if !entry_sym.is_empty() && entry_sym != symbol {
+                continue;
+            }
+            match serde_json::from_value::<MarketOrderItem>(raw.clone()) {
+                Ok(it) => items.push(it),
+                Err(_) => skipped += 1,
+            }
         }
 
-        let items = parsed.data.unwrap_or_default();
-
-        // 详尽 debug log，记录每条数据的 direction 和价格
+        // 详尽 debug log，记录前 5 条
         for (idx, item) in items.iter().take(5).enumerate() {
             debug!(
                 idx = idx,
-                direction = %item.data.direction,
-                price = %item.data.price,
-                volume = %item.data.volume,
-                orders = %item.data.orders,
+                direction = %item.direction,
+                price = %item.price,
+                volume = %item.volume,
+                orders = %item.orders,
                 "market order item (first 5)"
             );
         }
         debug!(
-            total_items = items.len(),
-            unique_directions = ?items.iter().map(|i| i.data.direction.clone()).collect::<std::collections::HashSet<_>>(),
-            first_price = ?items.iter().next().map(|i| i.data.price.clone()),
-            last_price = ?items.iter().last().map(|i| i.data.price.clone()),
+            filtered_items = items.len(),
+            skipped = skipped,
+            raw_array_len = total_raw,
+            unique_directions = ?items.iter().map(|i| i.direction.clone()).collect::<std::collections::HashSet<_>>(),
+            first_price = ?items.iter().next().map(|i| i.price.clone()),
+            last_price = ?items.iter().last().map(|i| i.price.clone()),
             "market order summary"
         );
 
-        Ok(items.into_iter().map(|r| r.data).collect())
+        if items.is_empty() {
+            anyhow::bail!(
+                "No order book items for {} after filtering (raw={}, skipped={})",
+                symbol, total_raw, skipped
+            );
+        }
+
+        Ok(items)
     }
 
     /// Get instrument info
@@ -501,25 +540,52 @@ impl LbankClient {
     }
 
     /// 设置杠杆 - 文档3.3
+    ///
+    /// ⚠️ **服务端响应 data 字段格式不一致**: 可能是 `0` (整数) / `{}` (空对象) / `null`。
+    /// 这里只关心顶层 `code == 200`，不解析 data。
     pub async fn set_leverage(
         &self,
         symbol: &str,
         leverage: i32,
     ) -> Result<()> {
-        #[derive(Deserialize)]
-        struct Response { code: i32 }
-
         let req = SetLeverageRequest {
             instrument_id: symbol.to_string(),
             long_leverage: leverage,
             short_leverage: leverage,
         };
 
-        let resp: Response = self.post("/cfd/position/v1/setMultiLeverage", &req).await?;
-        if resp.code == 200 {
+        // 直接发请求并手工检查 code，绕过 LbankResponse<T> 对 data 字段的类型假设
+        let body_str = serde_json::to_string(&req)?;
+        let path = "/cfd/position/v1/setMultiLeverage";
+        let url = format!("{}{}", self.base_url, path);
+        let headers = self.signer.get_headers("POST", path);
+
+        let response = self
+            .client
+            .post(&url)
+            .headers(headers.into_reqwest_headers())
+            .json(&req)
+            .send()
+            .await
+            .context("Request failed")?;
+
+        let status = response.status();
+        let body_text = response.text().await.context("Failed to read response")?;
+        debug!(status = %status, body = %body_text, "set_leverage response");
+
+        if !status.is_success() {
+            anyhow::bail!("set_leverage HTTP failed: {} - {}", status, body_text);
+        }
+
+        // 解析顶层 code，data 字段类型可能是 0 / {} / null，统一放过
+        let json: serde_json::Value = serde_json::from_str(&body_text)
+            .context("set_leverage: failed to parse response JSON")?;
+        let code = json.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
+        if code == 200 {
             Ok(())
         } else {
-            anyhow::bail!("Set leverage failed: code={}", resp.code)
+            let msg = json.get("message").and_then(|v| v.as_str()).unwrap_or("");
+            anyhow::bail!("set_leverage failed: code={}, msg={}", code, msg)
         }
     }
 
