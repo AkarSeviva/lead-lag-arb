@@ -261,6 +261,24 @@ impl LbankClient {
         let body_text = response.text().await.context("Failed to read response")?;
         debug!(status = %status, "market order body_len={}", body_text.len());
 
+        // 🐛 DEBUG: 把 raw body 落盘，方便抓回分析字段名
+        let dump_path = std::env::var("LBANK_DUMP_DIR")
+            .unwrap_or_else(|_| "/tmp/lbank_dump".to_string());
+        let _ = std::fs::create_dir_all(&dump_path);
+        let dump_file = format!(
+            "{}/SendQryMarketOrder_raw_{:?}.json",
+            dump_path,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0)
+        );
+        if let Err(e) = std::fs::write(&dump_file, &body_text) {
+            eprintln!("⚠️  failed to dump raw body to {}: {}", dump_file, e);
+        } else {
+            eprintln!("📥 dumped raw response to {} ({} bytes)", dump_file, body_text.len());
+        }
+
         if !status.is_success() {
             anyhow::bail!("API request failed: {} - {}", status, body_text);
         }
@@ -280,6 +298,29 @@ impl LbankClient {
             .ok_or_else(|| anyhow::anyhow!("market order response missing data array"))?;
 
         let total_raw = arr.len();
+
+        // 🐛 DEBUG: 打印第一条 entry 的字段名和类型，便于诊断字段大小写差异
+        if let Some(first) = arr.first() {
+            let raw = first.get("data").unwrap_or(first);
+            if let Some(obj) = raw.as_object() {
+                eprintln!("\n[ORDER BOOK FIRST ENTRY FIELDS]");
+                for (k, v) in obj.iter() {
+                    let t = match v {
+                        serde_json::Value::String(_) => "String",
+                        serde_json::Value::Number(n) => {
+                            if n.is_i64() { "i64" } else if n.is_f64() { "f64" } else { "num" }
+                        }
+                        serde_json::Value::Bool(_) => "bool",
+                        serde_json::Value::Array(_) => "Array",
+                        serde_json::Value::Object(_) => "Object",
+                        serde_json::Value::Null => "Null",
+                    };
+                    eprintln!("  {}: type={} value={}", k, t, v);
+                }
+                eprintln!("[/ORDER BOOK FIRST ENTRY FIELDS]\n");
+            }
+        }
+
         let mut items: Vec<MarketOrderItem> = Vec::with_capacity(arr.len());
         let mut skipped = 0usize;
 

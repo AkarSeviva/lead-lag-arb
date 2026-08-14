@@ -963,17 +963,20 @@ pub struct MarketOrderResponse {
 /// 暂时**不再假设 0=Bid/1=Ask**，直接透传 direction 字符串，使用方自行判断。
 #[derive(Debug, Clone, Deserialize)]
 pub struct MarketOrderItem {
-    #[serde(rename = "Orders")]
+    #[serde(rename = "Orders", alias = "orders")]
     pub orders: String,
-    #[serde(rename = "Price")]
+    #[serde(rename = "Price", alias = "price")]
     pub price: String,
-    #[serde(rename = "Volume")]
+    #[serde(rename = "Volume", alias = "volume")]
     pub volume: String,
-    #[serde(rename = "instrumentID")]
+    /// VPS 实测服务端返回字段名为 camelCase `instrumentID`，
+    /// 但 HAR 抓的是 PascalCase `InstrumentID`，两种都接受
+    #[serde(rename = "InstrumentID", alias = "instrumentID")]
     pub instrument_id: String,
-    #[serde(rename = "Direction")]
+    /// Direction 字段大小写不敏感
+    #[serde(rename = "Direction", alias = "direction")]
     pub direction: String,
-    #[serde(rename = "ExchangeID")]
+    #[serde(rename = "ExchangeID", alias = "exchangeID")]
     pub exchange_id: String,
     /// 部分响应可能带有成交数
     #[serde(rename = "TradedNum", default)]
