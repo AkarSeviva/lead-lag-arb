@@ -119,8 +119,8 @@ impl LbankClient {
                 // 尝试只用 data 部分解析，看能不能过
                 let just_data = serde_json::from_str::<serde_json::Value>(&body_text)
                     .ok()
-                    .and_then(|v| v.get("data"))
-                    .map(|d| serde_json::to_string_pretty(d).unwrap_or_default())
+                    .and_then(|v| v.get("data").cloned())
+                    .map(|d| serde_json::to_string_pretty(&d).unwrap_or_default())
                     .unwrap_or_default();
                 tracing::error!(target: "lbank_parse_error", "data field raw: {}", just_data);
                 return Err(anyhow::anyhow!("JSON parse failed: {}", e)).context("Failed to parse response");
@@ -179,8 +179,8 @@ impl LbankClient {
                 // 尝试只用 data 部分解析，看能不能过
                 let just_data = serde_json::from_str::<serde_json::Value>(&body_text)
                     .ok()
-                    .and_then(|v| v.get("data"))
-                    .map(|d| serde_json::to_string_pretty(d).unwrap_or_default())
+                    .and_then(|v| v.get("data").cloned())
+                    .map(|d| serde_json::to_string_pretty(&d).unwrap_or_default())
                     .unwrap_or_default();
                 tracing::error!(target: "lbank_parse_error", "data field raw: {}", just_data);
                 return Err(anyhow::anyhow!("JSON parse failed: {}", e)).context("Failed to parse response");
