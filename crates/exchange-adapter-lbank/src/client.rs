@@ -110,8 +110,13 @@ impl LbankClient {
             anyhow::bail!("API request failed: {} - {}", status, body_text);
         }
 
-        let parsed: LbankResponse<R> =
-            serde_json::from_str(&body_text).context("Failed to parse response")?;
+        let parsed: LbankResponse<R> = match serde_json::from_str(&body_text) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::error!(target: "lbank_parse_error", "JSON parse failed: {}", e);
+                return Err(anyhow::anyhow!("JSON parse failed: {}", e)).context("Failed to parse response");
+            }
+        };
 
         parsed.into_result().context("API returned error")
     }
@@ -156,8 +161,13 @@ impl LbankClient {
             anyhow::bail!("API request failed: {} - {}", status, body_text);
         }
 
-        let parsed: LbankResponse<R> =
-            serde_json::from_str(&body_text).context("Failed to parse response")?;
+        let parsed: LbankResponse<R> = match serde_json::from_str(&body_text) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::error!(target: "lbank_parse_error", "JSON parse failed: {}", e);
+                return Err(anyhow::anyhow!("JSON parse failed: {}", e)).context("Failed to parse response");
+            }
+        };
 
         parsed.into_result().context("API returned error")
     }
