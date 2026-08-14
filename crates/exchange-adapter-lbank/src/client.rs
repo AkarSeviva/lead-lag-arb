@@ -543,16 +543,16 @@ impl LbankClient {
             data: serde_json::Value, // 改为 Value 以隔离问题
         }
 
-        // 响应是 data: [{data: {...}}] - 数组包装，内层 data 才是 LeverageInfo
-        let resp: LbankResponse<Vec<InnerData>> = self.post("/cfd/action/v1.0/SendQryLeverage", &Request {
+        // post 内部已经包了一层 LbankResponse<R> 并取 .data 返回，所以这里 R 直接是 Vec<InnerData>
+        let resp: Vec<InnerData> = self.post("/cfd/action/v1.0/SendQryLeverage", &Request {
             instrument_id: symbol.to_string(),
             exchange_id: "Exchange".to_string(),
         }).await?;
 
-        // 直接拿原始 Value 然后手动解析 LeverageInfo
+        // 响应是 data: [{data: {...}}] - 数组包装，内层 data 才是 LeverageInfo
         let raw_value = resp
-            .data
-            .and_then(|arr| arr.into_iter().next())
+            .into_iter()
+            .next()
             .map(|d| d.data)
             .ok_or_else(|| anyhow::anyhow!("No leverage data returned"))?;
 
