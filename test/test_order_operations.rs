@@ -1,26 +1,19 @@
-//! 订单操作测试 - 解耦版
+//! 限价开多 + 止损止盈测试
 //!
-//! 设计原则：
-//! 1. 每个操作都是**独立函数**，操作之间互不依赖具体实现细节
-//! 2. 使用 **轮询等待** (poll-until-stable) 而非固定 sleep，避免顺序冲突
-//! 3. **reduce-only 平仓**：平仓 direction == 持仓 direction (不再做反转)
-//! 4. 每个操作有详细 debug log 记录所有 IO，便于后续逆向分析
+//! 对应逆向文档测试用例：
+//! - 限价开多 + 设置止损 (sl_trigger_price < 买入价)
+//! - 限价开多 + 设置止盈 (tp_trigger_price > 买入价)
+//! - 限价开多 + 同时设置止损+止盈
+//! - 止损触发后检查持仓自动平仓
+//! - 止盈触发后检查持仓自动平仓
+//! - 触发单取消
 //!
-//! 测试流程（新版本）：
-//! - Phase A: 清理 & 状态确认
-//! - Phase B: 市价开多 → 轮询等待生效 → 市价平多 → 轮询等待已平
-//! - Phase C: 市价开空 → 轮询等待生效 → 市价平空 → 轮询等待已平
-//! - Phase D: 限价开多 (带 TPSL) → 轮询等待挂单 → 撤单 → 轮询等待已撤
-//! - Phase E: 限价开空 (带 TPSL) → 轮询等待挂单 → 撤单 → 轮询等待已撤
-//! - Phase F: 限价开多 (无 TPSL) → 轮询等待挂单 → 撤单
+//! Phase 顺序：
+//! - Phase A: 清理持仓/挂单 + 状态确认
+//! - Phase H: 限价开多 + 止损/止盈/同时TPSL → 撤单
 //! - Phase G: 最终状态确认
 //!
-//! 运行：
-//! - 默认 (A-G): `cargo run --release --bin test_order_operations`
-//! - 杠杆+止损止盈: `./test_order_operations --mode=stops`
-//! - 历史数据查询: `./test_order_operations --mode=history`
-//! - 限价平仓测试: `./test_order_operations --mode=limit-close`
-//! - 完整测试: `./test_order_operations --mode=all`
+//! 运行：`cargo run --package test --bin test_order_operations`
 
 use exchange_adapter_lbank::{
     auth::LbankSigner,
@@ -1602,20 +1595,14 @@ async fn phase_j_limit_close_test(client: &LbankClient, reporter: &mut TestRepor
 
 #[derive(Debug)]
 enum TestMode {
-    Full,       // 原有 A-G 全部
-    Stops,      // H: 杠杆 + 止损止盈
-    History,    // I: 只读历史数据
-    LimitClose, // J: 限价平仓
-    All,        // A-G + H + I + J (完整测试)
+    Full,  // 默认：限价开多+触发单测试 (A→H→G)
+    All,   // --mode=all: 同上
 }
 
 impl TestMode {
     fn from_args() -> Self {
         for arg in std::env::args() {
             match arg.as_str() {
-                "--mode=stops" => return TestMode::Stops,
-                "--mode=history" => return TestMode::History,
-                "--mode=limit-close" => return TestMode::LimitClose,
                 "--mode=all" => return TestMode::All,
                 _ => {}
             }
@@ -1665,46 +1652,12 @@ async fn main() -> anyhow::Result<()> {
     }
 
     match mode {
-        // 完整测试顺序：
-        // 0. I(只读) → A(清理) → B(市价多) → C(市价空)
-        // → F(限价多撤) → D(限价多TPSL撤) → E(限价空TPSL撤)
-        // → J(限价平仓) → H(杠杆+TPSL) → G(最终状态)
+        // 限价开多 + 触发单完整测试 (对应逆向文档测试用例)
+        // A(清理) → H(限价开多+止损/止盈/同时TPSL→撤单) → G(状态确认)
         TestMode::Full | TestMode::All => {
-            phase_i_history_queries(&client, &mut reporter).await;
-            gap!();
-            phase_a_status_and_cleanup(&client, &mut reporter).await;
-            gap!();
-            phase_b_market_long_roundtrip(&client, &mut reporter).await;
-            gap!();
-            phase_c_market_short_roundtrip(&client, &mut reporter).await;
-            gap!();
-            phase_f_limit_long_no_tpsl_and_cancel(&client, &mut reporter).await;
-            gap!();
-            phase_d_limit_long_with_tpsl(&client, &mut reporter).await;
-            gap!();
-            phase_e_limit_short_with_tpsl(&client, &mut reporter).await;
-            gap!();
-            phase_j_limit_close_test(&client, &mut reporter).await;
-            gap!();
-            phase_h_leverage_and_stops(&client, &mut reporter).await;
-            gap!();
-            phase_g_final_state(&client, &mut reporter).await;
-        }
-        // 单独测试：各自以 A(清理) 开头，G(状态) 结尾
-        TestMode::Stops => {
             phase_a_status_and_cleanup(&client, &mut reporter).await;
             gap!();
             phase_h_leverage_and_stops(&client, &mut reporter).await;
-            gap!();
-            phase_g_final_state(&client, &mut reporter).await;
-        }
-        TestMode::History => {
-            phase_i_history_queries(&client, &mut reporter).await;
-        }
-        TestMode::LimitClose => {
-            phase_a_status_and_cleanup(&client, &mut reporter).await;
-            gap!();
-            phase_j_limit_close_test(&client, &mut reporter).await;
             gap!();
             phase_g_final_state(&client, &mut reporter).await;
         }
