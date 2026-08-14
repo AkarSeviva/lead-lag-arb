@@ -1259,3 +1259,35 @@ impl From<&MarketOrderItem> for NormalizedPriceLevel {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ACTUAL_LEVERAGE_RESPONSE: &str = r#"{"code":200,"data":[{"data":{"shortMaintenanceMarginQuickAmount":"0","TradeUnitID":"11a7ff76-cce1-4894-a","shortLastAmount":"10798583.71157","LongMaxVolume":10000000000000000,"AccountID":"11a7ff76-cce1-4894-a837-67aa64a99fcb","ShortLastVolume":10000000000000000,"longLastAmount":"10798583.71157","ShortLeverage":22,"calMarkedPrice":"62884.3","LongMaxLeverage":200,"ShortMaxVolume":10000000000000000,"longMaintenanceMarginRate":"0.0025","LongLastVolume":10000000000000000,"LongLevel":1,"ShortMaxLeverage":200,"InstrumentID":"BTCUSDT","IsCrossMargin":1,"MemberID":"11a7ff76-cce1-4894-a837-67aa64a99fcb","longMaintenanceMarginQuickAmount":"0","shortMaintenanceMarginRate":"0.0025","LongLeverage":22,"ExchangeID":"Exchange","ShortLevel":1}}],"message":"成功"}"#;
+
+    #[derive(Debug, Deserialize)]
+    struct InnerData {
+        #[serde(rename = "data")]
+        data: LeverageInfo,
+    }
+
+    #[test]
+    fn test_leverage_parsing() {
+        let resp: LbankResponse<Vec<InnerData>> = serde_json::from_str(ACTUAL_LEVERAGE_RESPONSE).unwrap();
+        println!("{:#?}", resp);
+        assert_eq!(resp.code, 200);
+        let info = resp.data.unwrap().into_iter().next().unwrap().data;
+        assert_eq!(info.long_leverage, 22);
+        assert_eq!(info.short_leverage, 22);
+    }
+
+    #[test]
+    fn test_leverage_info_direct() {
+        // Test parsing the inner data object directly
+        let inner_json = r#"{"shortMaintenanceMarginQuickAmount":"0","TradeUnitID":"11a7ff76-cce1-4894-a","shortLastAmount":"10798583.71157","LongMaxVolume":10000000000000000,"AccountID":"11a7ff76-cce1-4894-a837-67aa64a99fcb","ShortLastVolume":10000000000000000,"longLastAmount":"10798583.71157","ShortLeverage":22,"calMarkedPrice":"62884.3","LongMaxLeverage":200,"ShortMaxVolume":10000000000000000,"longMaintenanceMarginRate":"0.0025","LongLastVolume":10000000000000000,"LongLevel":1,"ShortMaxLeverage":200,"InstrumentID":"BTCUSDT","IsCrossMargin":1,"MemberID":"11a7ff76-cce1-4894-a837-67aa64a99fcb","longMaintenanceMarginQuickAmount":"0","shortMaintenanceMarginRate":"0.0025","LongLeverage":22,"ExchangeID":"Exchange","ShortLevel":1}"#;
+        let info: LeverageInfo = serde_json::from_str(inner_json).unwrap();
+        println!("{:#?}", info);
+        assert_eq!(info.long_leverage, 22);
+    }
+}
