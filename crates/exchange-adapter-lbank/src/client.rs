@@ -555,7 +555,7 @@ impl LbankClient {
         price: Decimal,
         sl_trigger_price: &str,
         tp_trigger_price: &str,
-        trigger_order_type: TriggerOrderType,
+        trigger_order_type: &str, // "2"=订单止盈止损, "1"=持仓止盈止损
     ) -> Result<OrderInsertResponse> {
         let req = CloseOrderInsertRequest::new(
             symbol,
@@ -657,7 +657,7 @@ impl LbankClient {
         Ok(body_text)
     }
 
-    /// 查询触发单 - 文档4.3
+    /// 查询触发单 - 文档4.3 (默认查所有类型)
     pub async fn query_trigger_orders(&self) -> Result<Vec<TriggerOrderResponse>> {
         self.get(
             "/cfd/query/v1.0/TriggerOrder",
@@ -666,9 +666,58 @@ impl LbankClient {
                 ("ExchangeID", "Exchange"),
                 ("pageIndex", "1"),
                 ("pageSize", "1000"),
-                ("TriggerOrderType", "12"),  // 查询所有
+                ("TriggerOrderType", "12"), // 查询所有
             ]),
         ).await
+    }
+
+    /// 查询触发单 (支持指定 TriggerOrderType)
+    /// type="1"=持仓止盈止损, "2"=订单止盈止损, "3"=计划委托
+    /// "12"=所有类型
+    pub async fn query_trigger_orders_typed(&self, trigger_order_type: &str) -> Result<Vec<TriggerOrderResponse>> {
+        self.get(
+            "/cfd/query/v1.0/TriggerOrder",
+            Some(&[
+                ("ProductGroup", "SwapU"),
+                ("ExchangeID", "Exchange"),
+                ("pageIndex", "1"),
+                ("pageSize", "1000"),
+                ("TriggerOrderType", trigger_order_type),
+            ]),
+        ).await
+    }
+
+    /// 取消触发单 - 文档: SendTriggerOrderAction
+    /// ActionFlag="1" = 撤销
+    pub async fn cancel_trigger_order(&self, order_sys_id: &str) -> Result<TriggerOrderActionResponse> {
+        let req = TriggerOrderActionRequest {
+            order_sys_id: order_sys_id.to_string(),
+            action_flag: "1".to_string(),
+        };
+        self.post("/cfd/action/v1.0/SendTriggerOrderAction", &req).await
+    }
+
+    /// 给已有仓位添加止盈止损 - 文档: SendTriggerOrderInsert
+    /// TriggerOrderType="1" (持仓止盈止损)
+    /// direction 应为持仓方向 (0=多, 1=空), offset_flag="8"
+    pub async fn add_position_tpsl(
+        &self,
+        symbol: &str,
+        trade_unit_id: &str,
+        posi_direction: TradeDirection,
+        volume: f64,
+        sl_trigger_price: f64,
+        tp_trigger_price: f64,
+    ) -> Result<TriggerOrderActionResponse> {
+        let req = AddPositionTPSLRequest::new(
+            symbol,
+            trade_unit_id,
+            posi_direction,
+            volume,
+            sl_trigger_price,
+            tp_trigger_price,
+        );
+        self.post("/cfd/cff/v1/SendTriggerOrderInsert", &req).await
     }
 
     /// 查询历史委托 - 文档5.3

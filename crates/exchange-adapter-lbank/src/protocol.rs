@@ -74,6 +74,20 @@ impl TradeDirection {
             Self::Short => "1",
         }
     }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Long => "Long",
+            Self::Short => "Short",
+        }
+    }
+
+    pub fn opposing(&self) -> Self {
+        match self {
+            Self::Long => Self::Short,
+            Self::Short => Self::Long,
+        }
+    }
 }
 
 /// Order price type - 源码确认 (文档4.8)
@@ -324,7 +338,7 @@ impl CloseOrderInsertRequest {
         price: f64,
         sl_trigger_price: &str,
         tp_trigger_price: &str,
-        trigger_order_type: TriggerOrderType,
+        trigger_order_type: &str, // "2"=订单止盈止损, "1"=持仓止盈止损
     ) -> Self {
         Self {
             instrument_id: symbol.to_string(),
@@ -339,7 +353,7 @@ impl CloseOrderInsertRequest {
             close_sl_trigger_price_type: "0".to_string(),
             close_tp_trigger_price: tp_trigger_price.to_string(),
             close_tp_trigger_price_type: "0".to_string(),
-            trigger_order_type: trigger_order_type.as_str().to_string(),
+            trigger_order_type: trigger_order_type.to_string(),
         }
     }
 }
@@ -664,31 +678,149 @@ pub struct TradeResponse {
 }
 
 /// Trigger Order Response (触发单) - 文档4.3
+/// ⚠️ Lbank 实际响应用 PascalCase (如 `OrderSysID`, `TriggerStatus`)
 #[derive(Debug, Deserialize)]
 pub struct TriggerOrderResponse {
-    #[serde(rename = "orderSysID")]
+    #[serde(rename = "OrderSysID")]
     pub order_sys_id: String,
-    #[serde(rename = "instrumentId")]
+    #[serde(rename = "InstrumentID")]
     pub instrument_id: String,
+    #[serde(rename = "TradeUnitID")]
+    pub trade_unit_id: Option<String>,
+    #[serde(rename = "Direction")]
     pub direction: Option<String>,
+    #[serde(rename = "OffsetFlag")]
     pub offset_flag: Option<String>,
+    #[serde(rename = "OrderType")]
     pub order_type: Option<String>,
     pub volume: Option<String>,
     pub price: Option<String>,
-    #[serde(rename = "triggerPrice")]
+    #[serde(rename = "SLTriggerPrice")]
+    pub sl_trigger_price: Option<String>,
+    #[serde(rename = "TPTriggerPrice")]
+    pub tp_trigger_price: Option<String>,
+    #[serde(rename = "TriggerPrice")]
     pub trigger_price: Option<String>,
-    #[serde(rename = "triggerOrderType")]
+    #[serde(rename = "TriggerOrderType")]
     pub trigger_order_type: Option<String>,
-    pub status: Option<String>,      // "0"=待触发, "1"=已触发, "2"=已撤销
-    #[serde(rename = "triggeredPrice")]
+    /// TriggerStatus: "0"=待触发, "1"=已触发/执行中, "2"=已撤销, "4"=已失效
+    #[serde(rename = "TriggerStatus")]
+    pub trigger_status: Option<String>,
+    #[serde(rename = "RelatedOrderSysID")]
+    pub related_order_sys_id: Option<String>,
+    #[serde(rename = "PosiDirection")]
+    pub posi_direction: Option<String>,
+    #[serde(rename = "TriggeredPrice")]
     pub triggered_price: Option<String>,
-    #[serde(rename = "insertTime")]
+    #[serde(rename = "InsertTime")]
     pub insert_time: Option<i64>,
-    #[serde(rename = "triggeredTime")]
-    pub triggered_time: Option<i64>,
+    #[serde(rename = "UpdateTime")]
+    pub update_time: Option<i64>,
 }
 
-/// Cancel Order Response (撤单响应) - 文档4.4
+/// Cancel Trigger Order Request - 文档: SendTriggerOrderAction
+/// ActionFlag: "1"=撤销
+#[derive(Debug, Serialize)]
+pub struct TriggerOrderActionRequest {
+    #[serde(rename = "OrderSysID")]
+    pub order_sys_id: String,
+    #[serde(rename = "ActionFlag")]
+    pub action_flag: String,
+}
+
+/// Cancel Trigger Order Response - 来自 SendTriggerOrderAction
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TriggerOrderActionResponse {
+    #[serde(rename = "OrderSysID")]
+    pub order_sys_id: String,
+    #[serde(rename = "TriggerStatus")]
+    pub trigger_status: String, // "4"=已撤销
+    #[serde(rename = "TriggerOrderType")]
+    pub trigger_order_type: String,
+    #[serde(rename = "RelatedOrderSysID")]
+    pub related_order_sys_id: String,
+    #[serde(rename = "InstrumentID")]
+    pub instrument_id: String,
+    #[serde(rename = "Direction")]
+    pub direction: String,
+    #[serde(rename = "Volume")]
+    pub volume: String,
+    #[serde(rename = "SLTriggerPrice")]
+    pub sl_trigger_price: String,
+    #[serde(rename = "TPTriggerPrice")]
+    pub tp_trigger_price: String,
+}
+
+/// Add TPSL to existing position Request - 文档: SendTriggerOrderInsert
+/// TriggerOrderType="1" (持仓止盈止损)
+#[derive(Debug, Serialize)]
+pub struct AddPositionTPSLRequest {
+    #[serde(rename = "InstrumentID")]
+    pub instrument_id: String,
+    #[serde(rename = "ExchangeID")]
+    pub exchange_id: String,
+    #[serde(rename = "TradeUnitID")]
+    pub trade_unit_id: String,
+    #[serde(rename = "PosiDirection")]
+    pub posi_direction: String,
+    #[serde(rename = "Direction")]
+    pub direction: String,
+    #[serde(rename = "OffsetFlag")]
+    pub offset_flag: String,
+    #[serde(rename = "Volume")]
+    pub volume: f64,
+    #[serde(rename = "SLTriggerPrice")]
+    pub sl_trigger_price: String,
+    #[serde(rename = "SLTriggerPriceType")]
+    pub sl_trigger_price_type: String,
+    #[serde(rename = "TPTriggerPrice")]
+    pub tp_trigger_price: String,
+    #[serde(rename = "TPTriggerPriceType")]
+    pub tp_trigger_price_type: String,
+    #[serde(rename = "TriggerOrderType")]
+    pub trigger_order_type: String, // "1"=持仓止盈止损
+    #[serde(rename = "OrderType")]
+    pub order_type: String, // "0"
+    #[serde(rename = "IsGuaranteedPriceOrder")]
+    pub is_guaranteed_price_order: i32,
+}
+
+impl AddPositionTPSLRequest {
+    pub fn new(
+        symbol: &str,
+        trade_unit_id: &str,
+        posi_direction: TradeDirection,
+        volume: f64,
+        sl_trigger_price: f64,
+        tp_trigger_price: f64,
+    ) -> Self {
+        Self {
+            instrument_id: symbol.to_string(),
+            exchange_id: "Exchange".to_string(),
+            trade_unit_id: trade_unit_id.to_string(),
+            posi_direction: posi_direction.as_str().to_string(),
+            direction: posi_direction.as_str().to_string(),
+            offset_flag: "8".to_string(),
+            volume,
+            sl_trigger_price: if sl_trigger_price > 0.0 {
+                sl_trigger_price.to_string()
+            } else {
+                String::new()
+            },
+            sl_trigger_price_type: "0".to_string(),
+            tp_trigger_price: if tp_trigger_price > 0.0 {
+                tp_trigger_price.to_string()
+            } else {
+                String::new()
+            },
+            tp_trigger_price_type: "0".to_string(),
+            trigger_order_type: "1".to_string(),
+            order_type: "0".to_string(),
+            is_guaranteed_price_order: 0,
+        }
+    }
+}
 #[derive(Debug, Deserialize)]
 pub struct CancelOrderResponse {
     #[serde(rename = "orderSysID")]

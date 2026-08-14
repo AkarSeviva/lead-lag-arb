@@ -15,7 +15,12 @@
 //! - Phase F: 限价开多 (无 TPSL) → 轮询等待挂单 → 撤单
 //! - Phase G: 最终状态确认
 //!
-//! 运行：`cargo run --release --bin test_order_operations`
+//! 运行：
+//! - 默认 (A-G): `cargo run --release --bin test_order_operations`
+//! - 杠杆+止损止盈: `./test_order_operations --mode=stops`
+//! - 历史数据查询: `./test_order_operations --mode=history`
+//! - 限价平仓测试: `./test_order_operations --mode=limit-close`
+//! - 完整测试: `./test_order_operations --mode=all`
 
 use exchange_adapter_lbank::{
     auth::LbankSigner,
@@ -28,10 +33,19 @@ use std::str::FromStr;
 use std::time::{Duration, Instant};
 use std::{fs::File, io::Write};
 use tracing::{debug, warn};
+
+/// Phase 之间强制 sleep 间隔 (防止 Cloudflare 1015)
+macro_rules! gap {
+    () => {
+        tokio::time::sleep(PHASE_INTER_DELAY).await;
+    };
+}
 use tracing_subscriber::util::SubscriberInitExt;
 
 const SYMBOL: &str = "BTCUSDT";
 const VOLUME_STR: &str = "0.0001";
+/// Helper: parse VOLUME_STR to Decimal
+fn vol() -> Decimal { Decimal::from_str(VOLUME_STR).unwrap() }
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(1); // 放慢轮询，避免 429
 
@@ -101,6 +115,12 @@ impl TestReporter {
     pub fn section_end(&mut self) {
         let line = "\n";
         self.output.push_str(line);
+        print!("{}", line);
+    }
+
+    pub fn sub(&mut self, title: &str) {
+        let line = format!("\n  ── {} ──\n", title);
+        self.output.push_str(&line);
         print!("{}", line);
     }
 
@@ -1050,8 +1070,559 @@ async fn phase_g_final_state(
 }
 
 // ============================================================================
+// Phase H: 杠杆 + 止损止盈测试
+// ============================================================================
+
+async fn phase_h_leverage_and_stops(client: &LbankClient, reporter: &mut TestReporter) {
+    reporter.section("H. 杠杆查询 + 止损止盈挂单 (Phase H)");
+    gap!();
+
+    // ── H1: 查询最大杠杆 ──────────────────────────────────────────────────────
+    reporter.sub("H1. 查询最大杠杆");
+    gap!();
+    match client.get_max_leverage(SYMBOL).await {
+        Ok((long_max, short_max)) => {
+            reporter.success(&format!(
+                "最大杠杆: Long={}x, Short={}x",
+                long_max, short_max
+            ));
+        }
+        Err(e) => {
+            reporter.fail(&format!("get_max_leverage 失败: {:#?}", e));
+            return;
+        }
+    }
+
+    // ── H2: 设置杠杆 20x ─────────────────────────────────────────────────────
+    reporter.sub("H2. 设置杠杆 20x");
+    gap!();
+    match client.set_leverage(SYMBOL, 20).await {
+        Ok(()) => reporter.success("设置杠杆 20x 成功"),
+        Err(e) => reporter.fail(&format!("set_leverage 失败: {:#?}", e)),
+    }
+
+    // ── H3: 获取当前中间价 ─────────────────────────────────────────────────────
+    reporter.sub("H3. 获取当前中间价 (用于设置止损止盈)");
+    gap!();
+    let mid_price: f64 = match client.get_order_book(SYMBOL, 5).await {
+        Ok(orders) => {
+            if orders.is_empty() {
+                reporter.fail("订单簿为空，无法获取中间价");
+                return;
+            }
+            let best_bid: f64 = orders
+                .iter()
+                .filter(|o| o.direction == "0")
+                .map(|o| o.price.parse::<f64>().unwrap_or(0.0))
+                .fold(0.0f64, |a, b| a.max(b));
+            let best_ask: f64 = orders
+                .iter()
+                .filter(|o| o.direction == "1")
+                .map(|o| o.price.parse::<f64>().unwrap_or(f64::MAX))
+                .fold(f64::MAX, |a, b| a.min(b));
+            if best_bid == 0.0 || best_ask == f64::MAX {
+                reporter.fail("无法分离 bid/ask");
+                return;
+            }
+            let mid = (best_bid + best_ask) / 2.0;
+            reporter.info(&format!(
+                "best_bid={}, best_ask={}, mid_price={}",
+                best_bid, best_ask, mid
+            ));
+            mid
+        }
+        Err(e) => {
+            reporter.fail(&format!("get_order_book 失败: {:#?}", e));
+            return;
+        }
+    };
+
+    // ── H4: 限价开多 ──────────────────────────────────────────────────────────
+    reporter.sub("H4. 限价开多 (价格 = mid - 50)");
+    gap!();
+    let open_price = (mid_price - 50.0).round();
+    let open_price_str = format!("{:.1}", open_price);
+    let open_resp = match client.limit_open(SYMBOL, TradeDirection::Long, vol(), open_price_str.parse().unwrap()).await {
+        Ok(r) => {
+            reporter.success(&format!(
+                "限价开多成功: order_sys_id={}, price={}, status={}",
+                r.order_sys_id, r.price, r.order_status
+            ));
+            r
+        }
+        Err(e) => {
+            reporter.fail(&format!("limit_open 失败: {:#?}", e));
+            return;
+        }
+    };
+
+    // 等待挂单生效
+    gap!();
+
+    // ── H5: 查询挂单确认存在 ──────────────────────────────────────────────────
+    reporter.sub("H5. 查询挂单确认");
+    gap!();
+    let (raw_body, parsed) = match op_query_pending_orders_raw(client, SYMBOL).await {
+        Ok(t) => t,
+        Err(e) => {
+            reporter.warn(&format!("query_orders 失败: {:#?}", e));
+            (String::new(), Vec::new())
+        }
+    };
+    let matched: Vec<_> = parsed.iter().filter(|o| o.order_sys_id == open_resp.order_sys_id).cloned().collect();
+    if matched.is_empty() {
+        reporter.warn(&format!(
+            "挂单未在 Order 接口查到 (order_sys_id={}), raw 前200字: {}",
+            open_resp.order_sys_id,
+            &raw_body.chars().take(200).collect::<String>()
+        ));
+    } else {
+        reporter.success(&format!("挂单确认存在: status={:?}", matched[0].order_status));
+    }
+
+    // ── H6: 挂止损单 ─────────────────────────────────────────────────────────
+    reporter.sub("H6. 挂止损单 (sl_trigger_price = open_price - 100)");
+    gap!();
+    let sl_price = open_price - 100.0;
+    match client.place_stop_order(
+        SYMBOL,
+        TradeDirection::Short, // 平多仓 = Short
+        vol(),
+        Decimal::ZERO,         // 触发后以市价平
+        &sl_price.to_string(), // sl_trigger_price
+        "",                    // 不设止盈
+        "2",                  // 止损
+    ).await {
+        Ok(r) => {
+            reporter.success(&format!(
+                "止损单下成功: order_sys_id={}, related_order_sys_id={}, status={}",
+                r.order_sys_id, r.related_order_sys_id, r.order_status
+            ));
+        }
+        Err(e) => {
+            reporter.fail(&format!("place_stop_order (止损) 失败: {:#?}", e));
+        }
+    }
+
+    gap!();
+    // ── H7: 挂止盈单 ──────────────────────────────────────────────────────────
+    reporter.sub("H7. 挂止盈单 (tp_trigger_price = open_price + 200)");
+    gap!();
+    let tp_price = open_price + 200.0;
+    match client.place_stop_order(
+        SYMBOL,
+        TradeDirection::Short,
+        vol(),
+        Decimal::ZERO,
+        "",                    // 不设止损
+        &tp_price.to_string(), // tp_trigger_price
+        "2",                  // 止盈 (trigger_order_type=2)
+    ).await {
+        Ok(r) => {
+            reporter.success(&format!(
+                "止盈单下成功: order_sys_id={}, related_order_sys_id={}, status={}",
+                r.order_sys_id, r.related_order_sys_id, r.order_status
+            ));
+        }
+        Err(e) => {
+            reporter.fail(&format!("place_stop_order (止盈) 失败: {:#?}", e));
+        }
+    }
+
+    gap!();
+
+    // ── H8: 查询触发单列表 ────────────────────────────────────────────────────
+    reporter.sub("H8. 查询触发单列表");
+    gap!();
+    match client.query_trigger_orders().await {
+        Ok(triggers) => {
+            reporter.success(&format!("触发单数量: {}", triggers.len()));
+            for t in triggers.iter().take(10) {
+                reporter.info(&format!(
+                    "  - order_sys_id={} {} type={} trigger_status={} sl={} tp={}",
+                    &t.order_sys_id,
+                    &t.instrument_id,
+                    t.trigger_order_type.as_deref().unwrap_or("?"),
+                    t.trigger_status.as_deref().unwrap_or("?"),
+                    t.sl_trigger_price.as_deref().unwrap_or("-"),
+                    t.tp_trigger_price.as_deref().unwrap_or("-"),
+                ));
+            }
+        }
+        Err(e) => {
+            let msg = format!("{:#?}", e);
+            if msg.contains("429") || msg.contains("1015") || msg.contains("Cloudflare") {
+                reporter.warn(&format!("CF 限速: {:#?}", e));
+            } else {
+                reporter.fail(&format!("query_trigger_orders 失败: {:#?}", e));
+            }
+        }
+    }
+
+    gap!();
+
+    // ── H9: 撤掉限价开多单 ────────────────────────────────────────────────────
+    reporter.sub("H9. 撤掉限价开多单 (测试只撤限价，不撤触发单)");
+    gap!();
+    match client.cancel_order(&open_resp.order_sys_id).await {
+        Ok(r) => reporter.success(&format!("撤单成功: order_sys_id={}, status={}", r.order_sys_id, r.order_status)),
+        Err(e) => reporter.fail(&format!("cancel_order 失败: {:#?}", e)),
+    }
+
+    gap!();
+
+    // ── H10: 最终状态 ──────────────────────────────────────────────────────────
+    reporter.sub("H10. 最终状态 (持仓应为0)");
+    gap!();
+    match op_get_positions(client).await {
+        Ok(positions) => {
+            reporter.success(&format!("最终持仓数: {}", positions.len()));
+            reporter.info(&op_print_position_summary(&positions));
+            if positions.is_empty() {
+                reporter.success("✅ 仓位已清空");
+            }
+        }
+        Err(e) => reporter.fail(&format!("查询持仓失败: {:#?}", e)),
+    }
+
+    gap!();
+    match client.query_trigger_orders().await {
+        Ok(triggers) => {
+            reporter.success(&format!("剩余触发单: {}", triggers.len()));
+        }
+        Err(e) => reporter.warn(&format!("触发单查询: {:#?}", e)),
+    }
+
+    reporter.section_end();
+}
+
+// ============================================================================
+// Phase I: 只读历史数据查询 (零风险)
+// ============================================================================
+
+async fn phase_i_history_queries(client: &LbankClient, reporter: &mut TestReporter) {
+    reporter.section("I. 历史数据查询 (只读, Phase I)");
+    gap!();
+
+    // ── I1: 历史成交 ──────────────────────────────────────────────────────────
+    reporter.sub("I1. 查询历史成交 (最近 7 天)");
+    gap!();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let week_ago = now - 7 * 86400;
+    match client.query_history_trades(week_ago, now).await {
+        Ok(trades) => {
+            reporter.success(&format!("历史成交数: {}", trades.len()));
+            for t in trades.iter().take(5) {
+                reporter.info(&format!(
+                    "  - order_sys_id={} price={} volume={} fee={}",
+                    t.order_sys_id,
+                    &t.price,
+                    &t.volume,
+                    &t.fee,
+                ));
+            }
+        }
+        Err(e) => {
+            let msg = format!("{:#?}", e);
+            if msg.contains("429") || msg.contains("1015") || msg.contains("Cloudflare") {
+                reporter.warn(&format!("CF 限速: {:#?}", e));
+            } else {
+                reporter.fail(&format!("query_history_trades 失败: {:#?}", e));
+            }
+        }
+    }
+
+    gap!();
+
+    // ── I2: 历史委托 ──────────────────────────────────────────────────────────
+    reporter.sub("I2. 查询历史委托 (最近 7 天)");
+    gap!();
+    match client.query_history_orders(week_ago, now).await {
+        Ok(orders) => {
+            reporter.success(&format!("历史委托数: {}", orders.len()));
+            for o in orders.iter().take(5) {
+                reporter.info(&format!(
+                    "  - order_sys_id={} {} price={} vol={} status={} close_profit={:?}",
+                    o.order_sys_id,
+                    o.instrument_id,
+                    o.price.as_deref().unwrap_or("?"),
+                    o.volume.as_deref().unwrap_or("?"),
+                    o.order_status.as_deref().unwrap_or("?"),
+                    o.close_profit.as_deref(),
+                ));
+            }
+        }
+        Err(e) => {
+            let msg = format!("{:#?}", e);
+            if msg.contains("429") || msg.contains("1015") || msg.contains("Cloudflare") {
+                reporter.warn(&format!("CF 限速: {:#?}", e));
+            } else {
+                reporter.fail(&format!("query_history_orders 失败: {:#?}", e));
+            }
+        }
+    }
+
+    gap!();
+
+    // ── I3: 聚合信息 ──────────────────────────────────────────────────────────
+    reporter.sub("I3. 查询聚合信息 (BTCUSDT)");
+    gap!();
+    match client.query_aggregate_info(SYMBOL).await {
+        Ok(info) => {
+            reporter.success("聚合信息查询成功");
+            reporter.success("聚合信息查询成功");
+            reporter.info(&format!(
+                "  - marked_price: {}, long_leverage: {:?}, short_leverage: {:?}",
+                &info.marked_price,
+                info.long_leverage,
+                info.short_leverage,
+            ));
+        }
+        Err(e) => {
+            let msg = format!("{:#?}", e);
+            if msg.contains("429") || msg.contains("1015") {
+                reporter.warn(&format!("CF 限速: {:#?}", e));
+            } else {
+                reporter.fail(&format!("query_aggregate_info 失败: {:#?}", e));
+            }
+        }
+    }
+
+    gap!();
+
+    // ── I4: 费率查询 ──────────────────────────────────────────────────────────
+    reporter.sub("I4. 查询费率 (BTCUSDT)");
+    gap!();
+    match client.get_fee_rate(SYMBOL).await {
+        Ok(fee) => {
+            reporter.success("费率查询成功");
+                reporter.info(&format!(
+                    "  - maker_open: {}, maker_close: {}, taker_open: {}, taker_close: {}",
+                    &fee.maker_open_fee_rate,
+                    &fee.maker_close_fee_rate,
+                    &fee.taker_open_fee_rate,
+                    &fee.taker_close_fee_rate,
+                ));
+        }
+        Err(e) => {
+            let msg = format!("{:#?}", e);
+            if msg.contains("429") || msg.contains("1015") {
+                reporter.warn(&format!("CF 限速: {:#?}", e));
+            } else {
+                reporter.fail(&format!("get_fee_rate 失败: {:#?}", e));
+            }
+        }
+    }
+
+    gap!();
+
+    // ── I5: 合约列表 ──────────────────────────────────────────────────────────
+    reporter.sub("I5. 查询合约列表");
+    gap!();
+    match client.get_instruments().await {
+        Ok(instruments) => {
+            reporter.success(&format!("合约数量: {}", instruments.len()));
+            for ins in instruments.iter().take(5) {
+                reporter.info(&format!(
+                    "  - {} / {}",
+                    &ins.instrument_id,
+                    &ins.product_group,
+                ));
+            }
+        }
+        Err(e) => reporter.fail(&format!("get_instruments 失败: {:#?}", e)),
+    }
+
+    gap!();
+
+    // ── I6: 24h Ticker ────────────────────────────────────────────────────────
+    reporter.sub("I6. 查询 24h Ticker");
+    gap!();
+    match client.get_tickers_24hr().await {
+        Ok(tickers) => {
+            reporter.success(&format!("24h Ticker 数量: {}", tickers.len()));
+            for tk in tickers.iter().take(3) {
+                reporter.info(&format!(
+                    "  - {} last={} open={} high={} low={} volume={}",
+                    &tk.instrument_id,
+                    &tk.last_price,
+                    &tk.open_price,
+                    &tk.high_price,
+                    &tk.low_price,
+                    &tk.volume,
+                ));
+            }
+        }
+        Err(e) => reporter.fail(&format!("get_tickers_24hr 失败: {:#?}", e)),
+    }
+
+    reporter.section_end();
+}
+
+// ============================================================================
+// Phase J: 市价开多 → 限价平仓测试
+// ============================================================================
+
+async fn phase_j_limit_close_test(client: &LbankClient, reporter: &mut TestReporter) {
+    reporter.section("J. 市价开多 → 限价平多 (Phase J)");
+    gap!();
+
+    // ── J1: 设置杠杆 ──────────────────────────────────────────────────────────
+    reporter.sub("J1. 设置杠杆 50x");
+    gap!();
+    match client.set_leverage(SYMBOL, 50).await {
+        Ok(()) => reporter.success("设置杠杆 50x 成功"),
+        Err(e) => reporter.fail(&format!("set_leverage 失败: {:#?}", e)),
+    }
+
+    // ── J2: 市价开多 ───────────────────────────────────────────────────────────
+    reporter.sub("J2. 市价开多");
+    gap!();
+    let open_resp = match client.market_open(SYMBOL, TradeDirection::Long, vol()).await {
+        Ok(r) => {
+            reporter.success(&format!(
+                "市价开多成功: order_sys_id={}, trade_price={}",
+                r.order_sys_id, r.trade_price
+            ));
+            r
+        }
+        Err(e) => {
+            reporter.fail(&format!("market_open 失败: {:#?}", e));
+            reporter.section_end();
+            return;
+        }
+    };
+
+    // ── J3: 等待持仓确认 ──────────────────────────────────────────────────────
+    reporter.sub("J3. 等待持仓确认");
+    let pos = op_wait_for_position(client, TradeDirection::Long, vol()).await;
+    match &pos {
+        Some(p) => reporter.success(&format!("持仓确认: TradeUnitID={:?}", p.trade_unit_id.as_deref())),
+        None => {
+            reporter.fail("等待持仓超时");
+            reporter.section_end();
+            return;
+        }
+    }
+
+    // ── J4: 限价平多 ──────────────────────────────────────────────────────────
+    reporter.sub("J4. 限价平多 (市价+10)");
+    gap!();
+    let trade_price: f64 = open_resp.trade_price.parse().unwrap_or(0.0);
+    let close_price = (trade_price + 10.0).round();
+
+    // 从持仓拿 TradeUnitID
+    let trade_unit_id = pos.as_ref().unwrap().trade_unit_id.as_deref().unwrap_or("");
+    if trade_unit_id.is_empty() {
+        reporter.fail("TradeUnitID 为空，无法限价平仓");
+        reporter.section_end();
+        return;
+    }
+
+    match client.limit_close(SYMBOL, TradeDirection::Short, vol(), Decimal::from_str(&close_price.to_string()).unwrap(), trade_unit_id).await {
+        Ok(r) => {
+            reporter.success(&format!(
+                "限价平多成功: order_sys_id={}, price={}, status={}",
+                r.order_sys_id, r.price, r.order_status
+            ));
+        }
+        Err(e) => reporter.fail(&format!("limit_close 失败: {:#?}", e)),
+    }
+
+    gap!();
+
+    // ── J5: 查询订单确认 ──────────────────────────────────────────────────────
+    reporter.sub("J5. 查询限价平多单确认");
+    gap!();
+    let (raw_body, parsed) = match op_query_pending_orders_raw(client, SYMBOL).await {
+        Ok(t) => t,
+        Err(e) => {
+            reporter.warn(&format!("query_orders 失败: {:#?}", e));
+            (String::new(), Vec::new())
+        }
+    };
+    let matched: Vec<_> = parsed.iter().filter(|o| {
+        o.offset_flag.as_deref() == Some("1") // 平仓
+    }).cloned().collect();
+    if matched.is_empty() {
+        reporter.warn(&format!(
+            "限价平多单未在 Order 接口查到, raw 前200字: {}",
+            &raw_body.chars().take(200).collect::<String>()
+        ));
+    } else {
+        reporter.success(&format!("限价平多单确认: order_sys_id={}, price={}", matched[0].order_sys_id, matched[0].price.as_deref().unwrap_or("?")));
+    }
+
+    // ── J6: 撤单 ──────────────────────────────────────────────────────────────
+    reporter.sub("J6. 撤掉限价平多单");
+    if !matched.is_empty() {
+        gap!();
+        let cancel_id = &matched[0].order_sys_id;
+        match client.cancel_order(cancel_id).await {
+            Ok(r) => reporter.success(&format!("撤单成功: status={}", r.order_status)),
+            Err(e) => reporter.fail(&format!("cancel_order 失败: {:#?}", e)),
+        }
+    }
+
+    gap!();
+
+    // ── J7: 市价平仓兜底 ───────────────────────────────────────────────────────
+    reporter.sub("J7. 市价平仓兜底");
+    match client.market_close(SYMBOL, TradeDirection::Long, vol(), trade_unit_id).await {
+        Ok(r) => {
+            reporter.success(&format!(
+                "市价平仓成功: order_sys_id={}, close_profit={}",
+                r.order_sys_id,
+                &r.close_profit
+            ));
+        }
+        Err(e) => reporter.fail(&format!("market_close 兜底失败: {:#?}", e)),
+    }
+
+    gap!();
+
+    // ── J8: 确认平仓 ──────────────────────────────────────────────────────────
+    reporter.sub("J8. 确认平仓");
+    let cleared = op_wait_for_no_position(client, TradeDirection::Long).await;
+    if cleared {
+        reporter.success("✅ 多仓已平清");
+    } else {
+        reporter.warn("多仓未能平清，请手动检查");
+    }
+
+    reporter.section_end();
+}
+
+// ============================================================================
 // Main
 // ============================================================================
+
+#[derive(Debug)]
+enum TestMode {
+    Full,       // 原有 A-G 全部
+    Stops,      // H: 杠杆 + 止损止盈
+    History,    // I: 只读历史数据
+    LimitClose, // J: 限价平仓
+    All,        // A-G + H + I + J (完整测试)
+}
+
+impl TestMode {
+    fn from_args() -> Self {
+        for arg in std::env::args() {
+            match arg.as_str() {
+                "--mode=stops" => return TestMode::Stops,
+                "--mode=history" => return TestMode::History,
+                "--mode=limit-close" => return TestMode::LimitClose,
+                "--mode=all" => return TestMode::All,
+                _ => {}
+            }
+        }
+        TestMode::Full
+    }
+}
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> anyhow::Result<()> {
@@ -1063,9 +1634,12 @@ async fn main() -> anyhow::Result<()> {
         .finish()
         .try_init()?;
 
+    let mode = TestMode::from_args();
+
     let mut reporter = TestReporter::new();
     reporter.info(&format!("交易对: {}", SYMBOL));
     reporter.info(&format!("数量: {} BTC", VOLUME_STR));
+    reporter.info(&format!("模式: {:?}", mode));
 
     // 创建签名器
     let signer = LbankSigner::new(
@@ -1090,19 +1664,36 @@ async fn main() -> anyhow::Result<()> {
         };
     }
 
-    phase_a_status_and_cleanup(&client, &mut reporter).await;
-    gap!();
-    phase_b_market_long_roundtrip(&client, &mut reporter).await;
-    gap!();
-    phase_c_market_short_roundtrip(&client, &mut reporter).await;
-    gap!();
-    phase_d_limit_long_with_tpsl(&client, &mut reporter).await;
-    gap!();
-    phase_e_limit_short_with_tpsl(&client, &mut reporter).await;
-    gap!();
-    phase_f_limit_long_no_tpsl_and_cancel(&client, &mut reporter).await;
-    gap!();
-    phase_g_final_state(&client, &mut reporter).await;
+    match mode {
+        TestMode::Full | TestMode::All => {
+            phase_a_status_and_cleanup(&client, &mut reporter).await;
+            gap!();
+            phase_b_market_long_roundtrip(&client, &mut reporter).await;
+            gap!();
+            phase_c_market_short_roundtrip(&client, &mut reporter).await;
+            gap!();
+            phase_d_limit_long_with_tpsl(&client, &mut reporter).await;
+            gap!();
+            phase_e_limit_short_with_tpsl(&client, &mut reporter).await;
+            gap!();
+            phase_f_limit_long_no_tpsl_and_cancel(&client, &mut reporter).await;
+            gap!();
+            phase_g_final_state(&client, &mut reporter).await;
+        }
+        TestMode::Stops | TestMode::All => {
+            phase_a_status_and_cleanup(&client, &mut reporter).await;
+            gap!();
+            phase_h_leverage_and_stops(&client, &mut reporter).await;
+        }
+        TestMode::History => {
+            phase_i_history_queries(&client, &mut reporter).await;
+        }
+        TestMode::LimitClose => {
+            phase_a_status_and_cleanup(&client, &mut reporter).await;
+            gap!();
+            phase_j_limit_close_test(&client, &mut reporter).await;
+        }
+    }
 
     let filename = "test_order_result.txt";
     reporter.write_to(filename)?;
