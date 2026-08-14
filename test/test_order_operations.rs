@@ -18,7 +18,7 @@
 use exchange_adapter_lbank::{
     auth::LbankSigner,
     client::LbankClient,
-    protocol::{OrderInsertResponse, PositionResponse, TradeDirection},
+    protocol::{OrderInsertResponse, PositionResponse, TradeDirection, TriggerOrderType},
     proxy::ProxyConfig,
 };
 use rust_decimal::Decimal;
@@ -1184,7 +1184,7 @@ async fn phase_h_leverage_and_stops(client: &LbankClient, reporter: &mut TestRep
         Decimal::ZERO,         // 触发后以市价平
         &sl_price.to_string(), // sl_trigger_price
         "",                    // 不设止盈
-        "2",                  // 止损
+        TriggerOrderType::OrderStopProfitLoss,
     ).await {
         Ok(r) => {
             reporter.success(&format!(
@@ -1209,7 +1209,7 @@ async fn phase_h_leverage_and_stops(client: &LbankClient, reporter: &mut TestRep
         Decimal::ZERO,
         "",                    // 不设止损
         &tp_price.to_string(), // tp_trigger_price
-        "2",                  // 止盈 (trigger_order_type=2)
+        TriggerOrderType::OrderStopProfitLoss,
     ).await {
         Ok(r) => {
             reporter.success(&format!(

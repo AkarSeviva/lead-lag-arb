@@ -1032,6 +1032,37 @@ pub struct FeeRateResponse {
     pub taker_close_fee_rate: String,
 }
 
+/// Leverage Info (查询杠杆响应) - 对应 SendQryLeverage
+#[derive(Debug, Deserialize)]
+pub struct LeverageInfo {
+    #[serde(rename = "TradeUnitID")]
+    pub trade_unit_id: String,
+    #[serde(rename = "AccountID")]
+    pub account_id: String,
+    #[serde(rename = "MemberID")]
+    pub member_id: String,
+    #[serde(rename = "InstrumentID")]
+    pub instrument_id: String,
+    #[serde(rename = "ExchangeID")]
+    pub exchange_id: String,
+    #[serde(rename = "LongLeverage")]
+    pub long_leverage: i32,
+    #[serde(rename = "ShortLeverage")]
+    pub short_leverage: i32,
+    #[serde(rename = "LongMaxLeverage")]
+    pub long_max_leverage: i32,
+    #[serde(rename = "ShortMaxLeverage")]
+    pub short_max_leverage: i32,
+    #[serde(rename = "IsCrossMargin")]
+    pub is_cross_margin: i32,
+    #[serde(rename = "LongLevel")]
+    pub long_level: i32,
+    #[serde(rename = "ShortLevel")]
+    pub short_level: i32,
+    #[serde(rename = "calMarkedPrice")]
+    pub cal_marked_price: String,
+}
+
 /// Aggregate Info (持仓限制等)
 #[derive(Debug, Deserialize)]
 pub struct AggregateInfo {

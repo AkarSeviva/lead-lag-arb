@@ -495,34 +495,43 @@ impl LbankClient {
         }
     }
 
-    /// 获取币种的最大可用杠杆 - 文档3.2
-    /// 返回 (long_max_leverage, short_max_leverage)
-    pub async fn get_max_leverage(&self, symbol: &str) -> Result<(i32, i32)> {
+    /// 查询杠杆 - 文档对应 SendQryLeverage
+    /// POST /cfd/action/v1/SendQryLeverage
+    /// payload: {InstrumentID: "BTCUSDT", ExchangeID: "Exchange"}
+    /// 返回 (long_leverage, short_leverage, long_max_leverage, short_max_leverage)
+    pub async fn get_leverage_info(&self, symbol: &str) -> Result<LeverageInfo> {
         #[derive(Serialize)]
-        struct Request<'a> {
-            #[serde(rename = "productGroup")]
-            product_group: &'a str,
-            #[serde(rename = "instrumentID")]
-            instrument_id: &'a str,
-            asset: &'a str,
+        struct Request {
+            #[serde(rename = "InstrumentID")]
+            instrument_id: String,
+            #[serde(rename = "ExchangeID")]
+            exchange_id: String,
         }
 
-        // 调用 sendQryAll API
-        let resp: LbankResponse<AggregateInfoResponse> = self.post("/cfd/agg/v1/sendQryAll", &Request {
-            product_group: "SwapU",
-            instrument_id: symbol,
-            asset: "USDT",
+        #[derive(Deserialize)]
+        struct InnerData {
+            #[serde(rename = "data")]
+            data: LeverageInfo,
+        }
+
+        let resp: LbankResponse<InnerData> = self.post("/cfd/action/v1/SendQryLeverage", &Request {
+            instrument_id: symbol.to_string(),
+            exchange_id: "Exchange".to_string(),
         }).await?;
 
-        // 从响应中提取最大杠杆
-        if let Some(data) = resp.data {
-            let long_max = data.long_max_leverage.unwrap_or(125);
-            let short_max = data.short_max_leverage.unwrap_or(125);
-            Ok((long_max, short_max))
-        } else {
-            // 默认值
-            Ok((125, 125))
-        }
+        resp.data.map(|d| d.data).ok_or_else(|| anyhow::anyhow!("No leverage data returned"))
+    }
+
+    /// 获取当前杠杆设置 (简洁版)
+    pub async fn get_leverage(&self, symbol: &str) -> Result<(i32, i32)> {
+        let info = self.get_leverage_info(symbol).await?;
+        Ok((info.long_leverage, info.short_leverage))
+    }
+
+    /// 获取最大杠杆 (简洁版)
+    pub async fn get_max_leverage(&self, symbol: &str) -> Result<(i32, i32)> {
+        let info = self.get_leverage_info(symbol).await?;
+        Ok((info.long_max_leverage, info.short_max_leverage))
     }
 
     /// 初始化杠杆设置 - 获取最大杠杆并设置
@@ -555,7 +564,7 @@ impl LbankClient {
         price: Decimal,
         sl_trigger_price: &str,
         tp_trigger_price: &str,
-        trigger_order_type: &str, // "2"=订单止盈止损, "1"=持仓止盈止损
+        trigger_order_type: TriggerOrderType,
     ) -> Result<OrderInsertResponse> {
         let req = CloseOrderInsertRequest::new(
             symbol,
@@ -564,7 +573,7 @@ impl LbankClient {
             price.to_string().parse().unwrap_or(0.0),
             sl_trigger_price,
             tp_trigger_price,
-            trigger_order_type,
+            trigger_order_type.as_str(),
         );
 
         self.post("/cfd/action/v1.0/SendCloseOrderInsert", &req).await
