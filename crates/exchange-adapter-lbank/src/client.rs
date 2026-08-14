@@ -498,6 +498,7 @@ impl LbankClient {
     /// 查询杠杆 - 文档对应 SendQryLeverage
     /// POST /cfd/action/v1.0/SendQryLeverage
     /// payload: {InstrumentID: "BTCUSDT", ExchangeID: "Exchange"}
+    /// 响应: {"code":200,"data":[{"data":{...}}],"message":"成功"}
     /// 返回 (long_leverage, short_leverage, long_max_leverage, short_max_leverage)
     pub async fn get_leverage_info(&self, symbol: &str) -> Result<LeverageInfo> {
         #[derive(Serialize)]
@@ -514,12 +515,16 @@ impl LbankClient {
             data: LeverageInfo,
         }
 
-        let resp: LbankResponse<InnerData> = self.post("/cfd/action/v1.0/SendQryLeverage", &Request {
+        // 响应是 data: [{data: {...}}] - 数组包装
+        let resp: LbankResponse<Vec<InnerData>> = self.post("/cfd/action/v1.0/SendQryLeverage", &Request {
             instrument_id: symbol.to_string(),
             exchange_id: "Exchange".to_string(),
         }).await?;
 
-        resp.data.map(|d| d.data).ok_or_else(|| anyhow::anyhow!("No leverage data returned"))
+        resp.data
+            .and_then(|arr| arr.into_iter().next())
+            .map(|d| d.data)
+            .ok_or_else(|| anyhow::anyhow!("No leverage data returned"))
     }
 
     /// 获取当前杠杆设置 (简洁版)
