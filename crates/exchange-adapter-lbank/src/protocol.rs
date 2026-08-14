@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Deserialize)]
 pub struct LbankResponse<T> {
     pub code: i32,
+    #[serde(rename = "message")]
     pub msg: Option<String>,
     pub data: Option<T>,
 }
