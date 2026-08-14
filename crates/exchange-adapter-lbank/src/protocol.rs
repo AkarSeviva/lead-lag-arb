@@ -3,7 +3,26 @@
 //! Based on reversed engineered API from browser HAR analysis.
 
 use rust_decimal::Decimal;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+
+/// Deserialize i64 from either a number or a string
+fn deserialize_i64<'de, D>(deserializer: D) -> Result<i64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum NumberOrString {
+        I64(i64),
+        String(String),
+    }
+
+    let num = NumberOrString::deserialize(deserializer)?;
+    match num {
+        NumberOrString::I64(v) => Ok(v),
+        NumberOrString::String(s) => s.parse().map_err(serde::de::Error::custom),
+    }
+}
 
 /// Lbank API Response wrapper
 #[derive(Debug, Clone, Deserialize)]
@@ -1038,51 +1057,51 @@ pub struct FeeRateResponse {
 /// {"code":200,"data":[{"data":{"shortMaintenanceMarginQuickAmount":"0","TradeUnitID":"...","shortLastAmount":"10798590","LongMaxVolume":10000000000000000,...,"LongLeverage":50,...}}],"message":"成功"}
 #[derive(Debug, Deserialize)]
 pub struct LeverageInfo {
-    #[serde(rename = "TradeUnitID")]
+    #[serde(alias = "TradeUnitID")]
     pub trade_unit_id: String,
-    #[serde(rename = "AccountID")]
+    #[serde(alias = "AccountID")]
     pub account_id: String,
-    #[serde(rename = "MemberID")]
+    #[serde(alias = "MemberID")]
     pub member_id: String,
-    #[serde(rename = "InstrumentID")]
+    #[serde(alias = "InstrumentID")]
     pub instrument_id: String,
-    #[serde(rename = "ExchangeID")]
+    #[serde(alias = "ExchangeID")]
     pub exchange_id: String,
-    #[serde(rename = "LongLeverage")]
+    #[serde(alias = "LongLeverage", deserialize_with = "deserialize_i64")]
     pub long_leverage: i64,
-    #[serde(rename = "ShortLeverage")]
+    #[serde(alias = "ShortLeverage", deserialize_with = "deserialize_i64")]
     pub short_leverage: i64,
-    #[serde(rename = "LongMaxLeverage")]
+    #[serde(alias = "LongMaxLeverage", deserialize_with = "deserialize_i64")]
     pub long_max_leverage: i64,
-    #[serde(rename = "ShortMaxLeverage")]
+    #[serde(alias = "ShortMaxLeverage", deserialize_with = "deserialize_i64")]
     pub short_max_leverage: i64,
-    #[serde(rename = "IsCrossMargin")]
+    #[serde(alias = "IsCrossMargin", deserialize_with = "deserialize_i64")]
     pub is_cross_margin: i64,
-    #[serde(rename = "LongLevel")]
+    #[serde(alias = "LongLevel", deserialize_with = "deserialize_i64")]
     pub long_level: i64,
-    #[serde(rename = "ShortLevel")]
+    #[serde(alias = "ShortLevel", deserialize_with = "deserialize_i64")]
     pub short_level: i64,
-    #[serde(rename = "calMarkedPrice")]
+    #[serde(alias = "calMarkedPrice")]
     pub cal_marked_price: String,
-    #[serde(rename = "shortMaintenanceMarginQuickAmount")]
+    #[serde(alias = "shortMaintenanceMarginQuickAmount")]
     pub short_maintenance_margin_quick_amount: String,
-    #[serde(rename = "longMaintenanceMarginQuickAmount")]
+    #[serde(alias = "longMaintenanceMarginQuickAmount")]
     pub long_maintenance_margin_quick_amount: String,
-    #[serde(rename = "shortLastAmount")]
+    #[serde(alias = "shortLastAmount")]
     pub short_last_amount: String,
-    #[serde(rename = "longLastAmount")]
+    #[serde(alias = "longLastAmount")]
     pub long_last_amount: String,
-    #[serde(rename = "LongMaxVolume")]
+    #[serde(alias = "LongMaxVolume", deserialize_with = "deserialize_i64")]
     pub long_max_volume: i64,
-    #[serde(rename = "ShortMaxVolume")]
+    #[serde(alias = "ShortMaxVolume", deserialize_with = "deserialize_i64")]
     pub short_max_volume: i64,
-    #[serde(rename = "LongLastVolume")]
+    #[serde(alias = "LongLastVolume", deserialize_with = "deserialize_i64")]
     pub long_last_volume: i64,
-    #[serde(rename = "ShortLastVolume")]
+    #[serde(alias = "ShortLastVolume", deserialize_with = "deserialize_i64")]
     pub short_last_volume: i64,
-    #[serde(rename = "longMaintenanceMarginRate")]
+    #[serde(alias = "longMaintenanceMarginRate")]
     pub long_maintenance_margin_rate: String,
-    #[serde(rename = "shortMaintenanceMarginRate")]
+    #[serde(alias = "shortMaintenanceMarginRate")]
     pub short_maintenance_margin_rate: String,
 }
 

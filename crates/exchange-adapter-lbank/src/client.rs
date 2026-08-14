@@ -537,14 +537,21 @@ impl LbankClient {
             exchange_id: String,
         }
 
-        // 实际响应是 data: [{...}] - 数组直接包含 LeverageInfo 字段，没有内层 data 包装
-        let resp: LbankResponse<Vec<LeverageInfo>> = self.post("/cfd/action/v1.0/SendQryLeverage", &Request {
+        #[derive(Deserialize)]
+        struct InnerData {
+            #[serde(rename = "data")]
+            data: LeverageInfo,
+        }
+
+        // 响应是 data: [{data: {...}}] - 数组包装，内层 data 才是 LeverageInfo
+        let resp: LbankResponse<Vec<InnerData>> = self.post("/cfd/action/v1.0/SendQryLeverage", &Request {
             instrument_id: symbol.to_string(),
             exchange_id: "Exchange".to_string(),
         }).await?;
 
         resp.data
             .and_then(|arr| arr.into_iter().next())
+            .map(|d| d.data)
             .ok_or_else(|| anyhow::anyhow!("No leverage data returned"))
     }
 
