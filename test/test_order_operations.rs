@@ -1665,25 +1665,38 @@ async fn main() -> anyhow::Result<()> {
     }
 
     match mode {
+        // 完整测试顺序：
+        // 0. I(只读) → A(清理) → B(市价多) → C(市价空)
+        // → F(限价多撤) → D(限价多TPSL撤) → E(限价空TPSL撤)
+        // → J(限价平仓) → H(杠杆+TPSL) → G(最终状态)
         TestMode::Full | TestMode::All => {
+            phase_i_history_queries(&client, &mut reporter).await;
+            gap!();
             phase_a_status_and_cleanup(&client, &mut reporter).await;
             gap!();
             phase_b_market_long_roundtrip(&client, &mut reporter).await;
             gap!();
             phase_c_market_short_roundtrip(&client, &mut reporter).await;
             gap!();
+            phase_f_limit_long_no_tpsl_and_cancel(&client, &mut reporter).await;
+            gap!();
             phase_d_limit_long_with_tpsl(&client, &mut reporter).await;
             gap!();
             phase_e_limit_short_with_tpsl(&client, &mut reporter).await;
             gap!();
-            phase_f_limit_long_no_tpsl_and_cancel(&client, &mut reporter).await;
+            phase_j_limit_close_test(&client, &mut reporter).await;
+            gap!();
+            phase_h_leverage_and_stops(&client, &mut reporter).await;
             gap!();
             phase_g_final_state(&client, &mut reporter).await;
         }
-        TestMode::Stops | TestMode::All => {
+        // 单独测试：各自以 A(清理) 开头，G(状态) 结尾
+        TestMode::Stops => {
             phase_a_status_and_cleanup(&client, &mut reporter).await;
             gap!();
             phase_h_leverage_and_stops(&client, &mut reporter).await;
+            gap!();
+            phase_g_final_state(&client, &mut reporter).await;
         }
         TestMode::History => {
             phase_i_history_queries(&client, &mut reporter).await;
@@ -1692,6 +1705,8 @@ async fn main() -> anyhow::Result<()> {
             phase_a_status_and_cleanup(&client, &mut reporter).await;
             gap!();
             phase_j_limit_close_test(&client, &mut reporter).await;
+            gap!();
+            phase_g_final_state(&client, &mut reporter).await;
         }
     }
 
