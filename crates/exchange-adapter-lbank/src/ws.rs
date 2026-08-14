@@ -11,7 +11,7 @@
 //! - Market data fields: a=instrumentID, b=highestPrice, c=lowestPrice, d=lastPrice, e=buyPrice, f=sellPrice
 //! - Deal data fields: a=instrumentID, b=volume, c=price, d=direction, e=tradeTime, f=tradeID
 
-use crate::protocol::NormalizedOrderBook;
+use crate::protocol::{NormalizedOrderBook, NormalizedPriceLevel};
 use anyhow::Result;
 use backoff::backoff::Backoff;
 use backoff::ExponentialBackoff;
@@ -535,7 +535,7 @@ impl LbankWebSocket {
         data: &serde_json::Value,
         timestamp: i64,
         market_cache: &Arc<RwLock<HashMap<String, MarketData>>>,
-        _order_book_cache: &Arc<RwLock<HashMap<String, NormalizedOrderBook>>>,
+        order_book_cache: &Arc<RwLock<HashMap<String, NormalizedOrderBook>>>,
         event_tx: &mpsc::Sender<WsEvent>,
     ) {
         match topic {
@@ -575,12 +575,57 @@ impl LbankWebSocket {
             TOPIC_ORDER_BOOK => {
                 // Order book data (Topic=3)
                 // Data format: {"b":[[price,volume],...],"s":[[price,volume],...]}
-                // 直接解析 data 本身（不是 data.d）
-                if let Some(order_book) = Self::parse_order_book_data(data) {
+                if let Some(parsed) = Self::parse_order_book_data(data) {
+                    // NOTE: strategy only uses a single symbol (BTCUSDT), so cache
+                    // key is hard-coded. To support multiple symbols, track
+                    // subscribe history and look up symbol from incoming tsn.
+                    let symbol = "BTCUSDT".to_string();
+
+                    // Sort bids desc, asks asc to match NormalizedOrderBook invariants
+                    let mut bids: Vec<NormalizedPriceLevel> = parsed.bids
+                        .into_iter()
+                        .map(|(price, volume)| NormalizedPriceLevel { price, volume, orders: 1 })
+                        .collect();
+                    bids.sort_by(|a, b| b.price.cmp(&a.price));
+
+                    let mut asks: Vec<NormalizedPriceLevel> = parsed.asks
+                        .into_iter()
+                        .map(|(price, volume)| NormalizedPriceLevel { price, volume, orders: 1 })
+                        .collect();
+                    asks.sort_by(|a, b| a.price.cmp(&b.price));
+
+                    let mid_price = match (bids.first(), asks.first()) {
+                        (Some(b), Some(a)) => (b.price + a.price) / Decimal::from(2),
+                        _ => Decimal::ZERO,
+                    };
+
+                    let book = NormalizedOrderBook {
+                        symbol: symbol.clone(),
+                        timestamp,
+                        last_price: mid_price,
+                        bids,
+                        asks,
+                        seq_id: None,
+                    };
+
+                    {
+                        let mut cache = order_book_cache.write();
+                        cache.insert(symbol.clone(), book.clone());
+                    }
+
+                    let bids_for_event: Vec<(Decimal, Decimal)> = book.bids
+                        .iter()
+                        .map(|l| (l.price, l.volume))
+                        .collect();
+                    let asks_for_event: Vec<(Decimal, Decimal)> = book.asks
+                        .iter()
+                        .map(|l| (l.price, l.volume))
+                        .collect();
+
                     let _ = event_tx.send(WsEvent::OrderBookUpdate {
-                        symbol: "BTCUSDT".to_string(), // 从订阅参数获取更好，这里简化处理
-                        bids: order_book.bids,
-                        asks: order_book.asks,
+                        symbol,
+                        bids: bids_for_event,
+                        asks: asks_for_event,
                         timestamp,
                     }).await;
                 }
@@ -697,10 +742,16 @@ impl LbankWebSocket {
     }
 
     /// Subscribe to order book updates (Topic=3)
+    ///
+    /// Source code (59960-f1769a647db941b9.js line 938) requires the
+    /// instrumentID to be formatted as `SYMBOL_DECIMAL_LIMIT`:
+    ///   `instrumentID: "".concat(e.instrumentID, "_").concat(e.decimal, "_").concat(e.limit || 25)`
     pub async fn subscribe_orderbook(&self, symbol: &str) -> Result<()> {
         if let Some(ref sender) = self.sender {
+            // Default: 2 decimal places, 25 depth — matches SendQryMarketOrder defaults
+            let formatted = format!("{}_2_25", symbol);
             sender.send(WsCommand::SubscribeOrderBook {
-                symbol: symbol.to_string(),
+                symbol: formatted,
             }).await?;
         }
         Ok(())

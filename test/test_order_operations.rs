@@ -20,6 +20,7 @@ use exchange_adapter_lbank::{
     client::LbankClient,
     protocol::{OrderInsertResponse, PositionResponse, TradeDirection, TriggerOrderType},
     proxy::ProxyConfig,
+    ws::{LbankWebSocket, WsEvent},
 };
 use rust_decimal::Decimal;
 use std::str::FromStr;
@@ -628,6 +629,80 @@ pub async fn op_get_mid_price(
     Ok(mid_price)
 }
 
+/// **get_mid_price_via_ws**：通过 WebSocket OrderBook topic 拿真实 bid/ask
+///
+/// VPS 后端的 SendQryMarketOrder REST 接口只返回 ask (Direction=1) 单边，
+/// 没法算 mid。WebSocket wss://uuws.rerrkvifj.com/ws/v3 订阅 OrderBook (x=3)
+/// 可以拿到完整 bid+ask：
+///   - 订阅消息: {"a":{"i":"BTCUSDT_2_25"},"x":3,"y":<tsn>,"z":1}
+///   - 推送格式: {"b":[["price","vol"],...], "s":[["price","vol"],...]}
+///
+/// Returns (best_bid, best_ask, depth, source).
+pub async fn get_mid_price_via_ws(
+    symbol: &str,
+) -> anyhow::Result<(f64, f64, usize, &'static str)> {
+    use anyhow::Context;
+    use tokio::time::{sleep, timeout};
+
+    // 1. 启动 WS 客户端
+    let mut ws = LbankWebSocket::new(None); // OrderBook 不需要鉴权
+    let mut event_rx = ws.start().context("ws.start() failed")?;
+
+    // 2. 订阅 OrderBook (instrumentID 格式: SYMBOL_DECIMAL_LIMIT)
+    ws.subscribe_orderbook(symbol)
+        .await
+        .context("ws.subscribe_orderbook() failed")?;
+
+    // 3. 等首条 OrderBook 推送 (5s 超时)
+    let deadline = std::time::Duration::from_secs(5);
+    let book: (Vec<(Decimal, Decimal)>, Vec<(Decimal, Decimal)>) = timeout(deadline, async {
+        loop {
+            match event_rx.recv().await {
+                Some(WsEvent::OrderBookUpdate {
+                    symbol: _,
+                    bids,
+                    asks,
+                    timestamp: _,
+                }) => {
+                    if bids.is_empty() && asks.is_empty() {
+                        continue;
+                    }
+                    return Ok::<_, anyhow::Error>((bids, asks));
+                }
+                Some(WsEvent::Connected) => {
+                    debug!("WS connected");
+                    continue;
+                }
+                Some(WsEvent::Error(e)) => {
+                    anyhow::bail!("WS error: {}", e);
+                }
+                Some(_) => continue,
+                None => anyhow::bail!("WS channel closed"),
+            }
+        }
+    })
+    .await
+    .context("timeout waiting for first OrderBook push")??;
+
+    // 4. 计算 best_bid / best_ask (bids 已按降序，asks 按升序)
+    let (bids, asks) = book;
+    let best_bid = bids
+        .first()
+        .map(|(p, _)| p.to_string().parse::<f64>().unwrap_or(0.0))
+        .unwrap_or(0.0);
+    let best_ask = asks
+        .first()
+        .map(|(p, _)| p.to_string().parse::<f64>().unwrap_or(f64::MAX))
+        .unwrap_or(f64::MAX);
+    let depth = bids.len() + asks.len();
+
+    // 5. 防止 WS event_rx 把 sender 阻塞，简单让 ws 析构
+    drop(ws);
+    sleep(std::time::Duration::from_millis(50)).await;
+
+    Ok((best_bid, best_ask, depth, "ws_orderbook"))
+}
+
 /// **op_print_position_summary**：把当前持仓列表格式化成可读字符串
 pub fn op_print_position_summary(positions: &[PositionResponse]) -> String {
     if positions.is_empty() {
@@ -1094,51 +1169,30 @@ async fn phase_h_leverage_and_stops(client: &LbankClient, reporter: &mut TestRep
         Err(e) => reporter.fail(&format!("set_leverage 失败: {:#?}", e)),
     }
 
-    // ── H3: 获取当前中间价 ─────────────────────────────────────────────────────
-    reporter.sub("H3. 获取当前中间价 (用于设置止损止盈)");
+    // ── H3: 获取当前中间价 (走 WS OrderBook) ─────────────────────────────────
+    // VPS 后端的 SendQryMarketOrder 只返回 ask 单边数据，没法算 mid。
+    // 真订单簿必须走 WS wss://uuws.rerrkvifj.com/ws/v3 OrderBook topic (x=3)。
+    reporter.sub("H3. 获取当前中间价 (来自 WS OrderBook topic)");
     gap!();
-    let mid_price: f64 = match client.get_order_book(SYMBOL, 25).await {
-        Ok(orders) => {
-            if orders.is_empty() {
-                reporter.fail("订单簿为空，无法获取中间价");
-                return;
-            }
-            // HAR 数据证实:
-            //   - Direction "0" = 买盘 Bid (价格降序，最大=最优买价)
-            //   - Direction "1" = 卖盘 Ask (价格升序，最小=最优卖价)
-            let best_bid: f64 = orders
-                .iter()
-                .filter(|o| o.direction == "0")
-                .map(|o| o.price.parse::<f64>().unwrap_or(0.0))
-                .fold(0.0f64, |a, b| a.max(b));
-            let best_ask: f64 = orders
-                .iter()
-                .filter(|o| o.direction == "1")
-                .map(|o| o.price.parse::<f64>().unwrap_or(f64::MAX))
-                .fold(f64::MAX, |a, b| a.min(b));
-            if best_bid == 0.0 || best_ask == f64::MAX {
+
+    let mid_price: f64 = match get_mid_price_via_ws(SYMBOL).await {
+        Ok((best_bid, best_ask, depth, ws_source)) => {
+            if best_bid <= 0.0 || best_ask >= f64::MAX || best_bid >= best_ask {
                 reporter.fail(&format!(
-                    "无法分离 bid/ask (depth={} 可能不足): best_bid={}, best_ask={}",
-                    orders.len(), best_bid, best_ask
-                ));
-                return;
-            }
-            if best_bid >= best_ask {
-                reporter.fail(&format!(
-                    "订单簿异常: best_bid={} >= best_ask={}",
-                    best_bid, best_ask
+                    "WS OrderBook 异常: best_bid={}, best_ask={}, source={}",
+                    best_bid, best_ask, ws_source
                 ));
                 return;
             }
             let mid = (best_bid + best_ask) / 2.0;
-            reporter.info(&format!(
-                "best_bid={}, best_ask={}, mid_price={} (depth={})",
-                best_bid, best_ask, mid, orders.len()
+            reporter.success(&format!(
+                "WS OrderBook OK: best_bid={}, best_ask={}, mid={}, depth={} (source={})",
+                best_bid, best_ask, mid, depth, ws_source
             ));
             mid
         }
         Err(e) => {
-            reporter.fail(&format!("get_order_book 失败: {:#?}", e));
+            reporter.fail(&format!("WS OrderBook 获取失败: {:#?}", e));
             return;
         }
     };
