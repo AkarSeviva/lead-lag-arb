@@ -1034,6 +1034,8 @@ pub struct FeeRateResponse {
 }
 
 /// Leverage Info (查询杠杆响应) - 对应 SendQryLeverage
+/// 实际响应字段（基于 API 真实返回）:
+/// {"code":200,"data":[{"data":{"shortMaintenanceMarginQuickAmount":"0","TradeUnitID":"...","shortLastAmount":"10798590","LongMaxVolume":10000000000000000,...,"LongLeverage":50,...}}],"message":"成功"}
 #[derive(Debug, Deserialize)]
 pub struct LeverageInfo {
     #[serde(rename = "TradeUnitID")]
@@ -1047,21 +1049,41 @@ pub struct LeverageInfo {
     #[serde(rename = "ExchangeID")]
     pub exchange_id: String,
     #[serde(rename = "LongLeverage")]
-    pub long_leverage: i32,
+    pub long_leverage: i64,
     #[serde(rename = "ShortLeverage")]
-    pub short_leverage: i32,
+    pub short_leverage: i64,
     #[serde(rename = "LongMaxLeverage")]
-    pub long_max_leverage: i32,
+    pub long_max_leverage: i64,
     #[serde(rename = "ShortMaxLeverage")]
-    pub short_max_leverage: i32,
+    pub short_max_leverage: i64,
     #[serde(rename = "IsCrossMargin")]
-    pub is_cross_margin: i32,
+    pub is_cross_margin: i64,
     #[serde(rename = "LongLevel")]
-    pub long_level: i32,
+    pub long_level: i64,
     #[serde(rename = "ShortLevel")]
-    pub short_level: i32,
+    pub short_level: i64,
     #[serde(rename = "calMarkedPrice")]
     pub cal_marked_price: String,
+    #[serde(rename = "shortMaintenanceMarginQuickAmount")]
+    pub short_maintenance_margin_quick_amount: String,
+    #[serde(rename = "longMaintenanceMarginQuickAmount")]
+    pub long_maintenance_margin_quick_amount: String,
+    #[serde(rename = "shortLastAmount")]
+    pub short_last_amount: String,
+    #[serde(rename = "longLastAmount")]
+    pub long_last_amount: String,
+    #[serde(rename = "LongMaxVolume")]
+    pub long_max_volume: i64,
+    #[serde(rename = "ShortMaxVolume")]
+    pub short_max_volume: i64,
+    #[serde(rename = "LongLastVolume")]
+    pub long_last_volume: i64,
+    #[serde(rename = "ShortLastVolume")]
+    pub short_last_volume: i64,
+    #[serde(rename = "longMaintenanceMarginRate")]
+    pub long_maintenance_margin_rate: String,
+    #[serde(rename = "shortMaintenanceMarginRate")]
+    pub short_maintenance_margin_rate: String,
 }
 
 /// Aggregate Info (持仓限制等)

@@ -528,13 +528,13 @@ impl LbankClient {
     }
 
     /// 获取当前杠杆设置 (简洁版)
-    pub async fn get_leverage(&self, symbol: &str) -> Result<(i32, i32)> {
+    pub async fn get_leverage(&self, symbol: &str) -> Result<(i64, i64)> {
         let info = self.get_leverage_info(symbol).await?;
         Ok((info.long_leverage, info.short_leverage))
     }
 
     /// 获取最大杠杆 (简洁版)
-    pub async fn get_max_leverage(&self, symbol: &str) -> Result<(i32, i32)> {
+    pub async fn get_max_leverage(&self, symbol: &str) -> Result<(i64, i64)> {
         let info = self.get_leverage_info(symbol).await?;
         Ok((info.long_max_leverage, info.short_max_leverage))
     }
@@ -542,19 +542,15 @@ impl LbankClient {
     /// 初始化杠杆设置 - 获取最大杠杆并设置
     /// 返回实际设置的杠杆值
     pub async fn init_leverage(&self, symbol: &str, requested_leverage: i32) -> Result<i32> {
-        // 先获取该币种的最大可用杠杆
         let (long_max, short_max) = self.get_max_leverage(symbol).await?;
         let max_allowed = long_max.min(short_max);
-
-        // 取较小值作为实际设置的杠杆
-        let actual_leverage = requested_leverage.min(max_allowed);
+        let actual_leverage = requested_leverage.min(max_allowed as i32);
 
         tracing::info!(
             "Initializing leverage for {}: requested={}, max_allowed={}, actual={}",
             symbol, requested_leverage, max_allowed, actual_leverage
         );
 
-        // 设置杠杆
         self.set_leverage(symbol, actual_leverage).await?;
 
         Ok(actual_leverage)
