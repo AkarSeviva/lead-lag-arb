@@ -540,7 +540,7 @@ impl LbankClient {
         #[derive(Deserialize)]
         struct InnerData {
             #[serde(rename = "data")]
-            data: LeverageInfo,
+            data: serde_json::Value, // 改为 Value 以隔离问题
         }
 
         // 响应是 data: [{data: {...}}] - 数组包装，内层 data 才是 LeverageInfo
@@ -549,10 +549,37 @@ impl LbankClient {
             exchange_id: "Exchange".to_string(),
         }).await?;
 
-        resp.data
+        // 直接拿原始 Value 然后手动解析 LeverageInfo
+        let raw_value = resp
+            .data
             .and_then(|arr| arr.into_iter().next())
             .map(|d| d.data)
-            .ok_or_else(|| anyhow::anyhow!("No leverage data returned"))
+            .ok_or_else(|| anyhow::anyhow!("No leverage data returned"))?;
+
+        // 逐字段打印原始类型，跟 LeverageInfo 字段对比
+        eprintln!("\n[LEVERAGE RAW FIELDS]");
+        if let Some(obj) = raw_value.as_object() {
+            for (k, v) in obj.iter() {
+                let t = match v {
+                    serde_json::Value::String(_) => "String",
+                    serde_json::Value::Number(n) => if n.is_i64() { "i64" } else if n.is_f64() { "f64" } else { "num" },
+                    serde_json::Value::Bool(_) => "bool",
+                    serde_json::Value::Array(_) => "Array",
+                    serde_json::Value::Object(_) => "Object",
+                    serde_json::Value::Null => "Null",
+                };
+                eprintln!("  {}: type={} value={}", k, t, v);
+            }
+        }
+        eprintln!("[/LEVERAGE RAW FIELDS]\n");
+
+        let info: LeverageInfo = serde_json::from_value(raw_value)
+            .map_err(|e| {
+                eprintln!("[LEVERAGE PARSE FAILED] {} (line {} col {})", e, e.line(), e.column());
+                anyhow::anyhow!("LeverageInfo parse failed: {}", e)
+            })?;
+
+        Ok(info)
     }
 
     /// 获取当前杠杆设置 (简洁版)
